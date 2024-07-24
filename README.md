@@ -68,4 +68,7 @@ Their repo for pykan can be found here: https://github.com/KindXiaoming/pykan.
 
 ## NOTES
 * This repository in its current state is not production level and is built for scientific testing purposes.
-* If you have any questions feel free to reach out to William Troy at troywilliame@gmail.com 
+* If you have any questions feel free to reach out to William Troy at troywilliame@gmail.com
+
+## Citation
+Troy, W. Sparks of Quantum Advantage and Rapid Retraining in Machine Learning. Preprint at http://arxiv.org/abs/2407.16020 (2024).  
