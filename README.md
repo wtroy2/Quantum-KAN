@@ -1,5 +1,5 @@
 # Quantum-KAN
-The repository contains 2 packages. The first is the quantum_kan package which is implimented in c++ bound to python and the second in qkan which is a modified version of the original pykan package.
+The repository contains 2 packages. The first is the quantum_kan package which is implimented in c++ bound to python and the second in qkan which is a modified version of the original pykan package. All experiments shown in the figures from the paper 'Sparks of Quantum Advantage and Rapid Retraining in Machine Learning' are saved in the jupyter notebooks in the experiments folder of this repo.
 
 ## quantum_kan
 quantum_kan creates initial problem setup and the forward pass for the Quantum Bezier-KAN. 
