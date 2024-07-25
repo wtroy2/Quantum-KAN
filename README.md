@@ -68,6 +68,7 @@ Their repo for pykan can be found here: https://github.com/KindXiaoming/pykan.
 
 ## NOTES
 * This repository in its current state is not production level and is built for scientific testing purposes.
+* There are future plans to speed up the forward pass before quantum optimization and update the repo and paper. 
 * If you have any questions feel free to reach out to William Troy at troywilliame@gmail.com
 
 ## Citation
