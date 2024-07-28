@@ -30,6 +30,8 @@
 #include <vector>
 #include <fstream>
 #include "include/json.hpp"
+#include <regex>
+
 
 namespace py = pybind11;
 using namespace SymEngine;
@@ -619,50 +621,440 @@ void precompute_powers(const ArrayXd &x, int max_exp, std::vector<ArrayXd> &x_po
     }
 }
 
-inline ArrayXd evaluate_symengine_expr_optimized(const RCP<const Basic> &expr, const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, 
-                                          const std::vector<ArrayXd> &x_powers, const std::vector<ArrayXd> &y_powers, const std::vector<ArrayXd> &z_powers,
-                                          ArrayXd &temp1, ArrayXd &temp2) {
-    if (is_a<const Symbol>(*expr)) {
-        const Symbol &sym = static_cast<const Symbol &>(*expr);
-        if (eq(sym, *symbol("x"))) {
-            return x;
-        } else if (eq(sym, *symbol("y"))) {
-            return y;
-        } else if (eq(sym, *symbol("z"))) {
-            return z;
-        }
-    } else if (is_a<const RealDouble>(*expr) || is_a<const Integer>(*expr) || is_a<const Rational>(*expr)) {
-        return ArrayXd::Constant(x.size(), eval_double(*expr));
-    } else if (is_a<const Add>(*expr)) {
-        temp1.setZero();
-        for (const auto &arg : expr->get_args()) {
-            temp1 += evaluate_symengine_expr_optimized(arg, x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
-        }
-        return temp1;
-    } else if (is_a<const Mul>(*expr)) {
-        temp2.setOnes();
-        for (const auto &arg : expr->get_args()) {
-            temp2 *= evaluate_symengine_expr_optimized(arg, x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
-        }
-        return temp2;
-    } else if (is_a<const Pow>(*expr)) {
-        const auto &pow_expr = static_cast<const Pow &>(*expr);
-        ArrayXd base_eval = evaluate_symengine_expr_optimized(pow_expr.get_base(), x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
-        double exponent = eval_double(*pow_expr.get_exp());
-        if (eq(*pow_expr.get_base(), *symbol("x")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < x_powers.size()) {
-            return x_powers[static_cast<int>(exponent)];
-        } else if (eq(*pow_expr.get_base(), *symbol("y")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < y_powers.size()) {
-            return y_powers[static_cast<int>(exponent)];
-        } else if (eq(*pow_expr.get_base(), *symbol("z")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < z_powers.size()) {
-            return z_powers[static_cast<int>(exponent)];
+void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, int max_exp,
+                                        std::unordered_map<std::string, ArrayXd> &precomputed_values) {
+    // Ensure x, y, z have valid sizes
+    if (x.size() == 0 || y.size() == 0 || z.size() == 0) {
+        throw std::invalid_argument("Input arrays must have non-zero size.");
+    }
+    // std::cout << "starting precompute_powers_and_combinations" << endl;
+    // Precompute powers of individual variables
+    for (int i = 1; i <= max_exp; ++i) {
+        if (i > 1) {
+            precomputed_values["x**" + std::to_string(i)] = x.pow(i);
+            precomputed_values["y**" + std::to_string(i)] = y.pow(i);
+            precomputed_values["z**" + std::to_string(i)] = z.pow(i);
         } else {
-            return base_eval.pow(exponent);
+            precomputed_values["x"] = x.pow(i);
+            precomputed_values["y"] = y.pow(i);
+            precomputed_values["z"] = z.pow(i);     
+        }
+    }
+
+    // Print all precomputed values
+    // std::cout << "Precomputed values:" << std::endl;
+    // for (const auto &pair : precomputed_values) {
+    //     std::cout << pair.first << std::endl; //" = " << pair.second.transpose() << std::endl; // Print the key and corresponding ArrayXd
+    // }
+    // std::cout << "intial precompute_powers_and_combinations" << endl;
+    std::string temp;
+
+    // Precompute combinations like x^i * y^j * z^k where i + j + k <= max_exp
+    for (int i = 0; i <= max_exp; ++i) {
+        for (int j = 0; j <= max_exp - i; ++j) {
+            for (int k = 0; k <= max_exp - i - j; ++k) {
+                // Skip the term that is just 1 (x^0 * y^0 * z^0)
+                if (i == 0 && j == 0 && k == 0) continue;
+                // std::cout << i << j<< k << endl;
+                std::string key;
+                ArrayXd product = ArrayXd::Ones(x.size()); // Start with 1
+                if (i > 0) {
+                    temp = std::to_string(i);
+                    if (temp != "1"){
+                        key += "x**" + temp;
+                        product *= precomputed_values["x**" + temp];
+                    } else {
+                        key += "x";
+                        product *= precomputed_values["x"];
+                    }
+                    if (j > 0) {
+                        temp = std::to_string(j);
+                        if (temp != "1"){
+                            key += "*y**" + temp;
+                            product *= precomputed_values["y**" + temp];
+                        } else {
+                            key += "*y";
+                            product *= precomputed_values["y"];
+                        }
+                    }
+                    if (k > 0) {
+                        temp = std::to_string(k);
+                        if (temp != "1"){
+                            key += "*z**" + temp;
+                            product *= precomputed_values["z**" + temp];
+                        } else {
+                            key += "*z";
+                            product *= precomputed_values["z"];
+                        }
+                    }
+                } else if (j > 0) {
+                    temp = std::to_string(j);
+                    if (temp != "1"){
+                        key += "y**" + temp;
+                        product *= precomputed_values["y**" + temp];
+                    } else {
+                        key += "y";
+                        product *= precomputed_values["y"];
+                    }
+                    if (k > 0) {
+                        temp = std::to_string(k);
+                        if (temp != "1"){
+                            key += "*z**" + temp;
+                            product *= precomputed_values["z**" + temp];
+                        } else {
+                            key += "*z";
+                            product *= precomputed_values["z"];
+                        }
+                    }
+                } else if (k > 0) {
+                    temp = std::to_string(k);
+                    if (temp != "1"){
+                        key += "z**" + temp;
+                        product *= precomputed_values["z**" + temp];
+                    } else {
+                        key += "z";
+                        product *= precomputed_values["z"];
+                    }
+                }
+
+                precomputed_values[key] = product;
+            }
+        }
+    }
+}
+
+// inline ArrayXd evaluate_symengine_expr_optimized(const RCP<const Basic> &expr, const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, 
+//                                           const std::vector<ArrayXd> &x_powers, const std::vector<ArrayXd> &y_powers, const std::vector<ArrayXd> &z_powers,
+//                                           ArrayXd &temp1, ArrayXd &temp2) {
+//     if (is_a<const Symbol>(*expr)) {
+//         const Symbol &sym = static_cast<const Symbol &>(*expr);
+//         if (eq(sym, *symbol("x"))) {
+//             return x;
+//         } else if (eq(sym, *symbol("y"))) {
+//             return y;
+//         } else if (eq(sym, *symbol("z"))) {
+//             return z;
+//         }
+//     } else if (is_a<const RealDouble>(*expr) || is_a<const Integer>(*expr) || is_a<const Rational>(*expr)) {
+//         return ArrayXd::Constant(x.size(), eval_double(*expr));
+//     } else if (is_a<const Add>(*expr)) {
+//         temp1.setZero();
+//         for (const auto &arg : expr->get_args()) {
+//             temp1 += evaluate_symengine_expr_optimized(arg, x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
+//         }
+//         return temp1;
+//     } else if (is_a<const Mul>(*expr)) {
+//         temp2.setOnes();
+//         for (const auto &arg : expr->get_args()) {
+//             temp2 *= evaluate_symengine_expr_optimized(arg, x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
+//         }
+//         return temp2;
+//     } else if (is_a<const Pow>(*expr)) {
+//         const auto &pow_expr = static_cast<const Pow &>(*expr);
+//         ArrayXd base_eval = evaluate_symengine_expr_optimized(pow_expr.get_base(), x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
+//         double exponent = eval_double(*pow_expr.get_exp());
+//         if (eq(*pow_expr.get_base(), *symbol("x")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < x_powers.size()) {
+//             return x_powers[static_cast<int>(exponent)];
+//         } else if (eq(*pow_expr.get_base(), *symbol("y")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < y_powers.size()) {
+//             return y_powers[static_cast<int>(exponent)];
+//         } else if (eq(*pow_expr.get_base(), *symbol("z")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < z_powers.size()) {
+//             return z_powers[static_cast<int>(exponent)];
+//         } else {
+//             return base_eval.pow(exponent);
+//         }
+//     } else {
+//         throw std::runtime_error("Unsupported SymEngine expression type");
+//     }
+//     return ArrayXd::Zero(x.size());
+// }
+
+// inline ArrayXd evaluate_symengine_expr_optimized(
+//     const RCP<const Basic> &expr,
+//     const std::unordered_map<std::string, ArrayXd> &precomputed_values,
+//     ArrayXd &temp1, ArrayXd &temp2) {
+    
+//     if (is_a<const Symbol>(*expr)) {
+//         const Symbol &sym = static_cast<const Symbol &>(*expr);
+//         std::string name = sym.get_name();
+//         if (precomputed_values.count(name)) {
+//             return precomputed_values.at(name);
+//         }
+//     } else if (is_a<const RealDouble>(*expr) || is_a<const Integer>(*expr) || is_a<const Rational>(*expr)) {
+//         return ArrayXd::Constant(temp1.size(), eval_double(*expr));
+//     } else if (is_a<const Add>(*expr)) {
+//         temp1.setZero();
+//         for (const auto &arg : expr->get_args()) {
+//             temp1 += evaluate_symengine_expr_optimized(arg, precomputed_values, temp1, temp2);
+//         }
+//         return temp1;
+//     } else if (is_a<const Mul>(*expr)) {
+//         temp2.setOnes();
+//         for (const auto &arg : expr->get_args()) {
+//             temp2 *= evaluate_symengine_expr_optimized(arg, precomputed_values, temp1, temp2);
+//         }
+//         return temp2;
+//     } else if (is_a<const Pow>(*expr)) {
+//         const auto &pow_expr = static_cast<const Pow &>(*expr);
+//         std::string base_str = pow_expr.get_base()->__str__();
+//         double exponent = eval_double(*pow_expr.get_exp());
+//         std::string key = base_str + std::to_string(static_cast<int>(exponent));
+
+//         if (precomputed_values.count(key)) {
+//             return precomputed_values.at(key);
+//         } else {
+//             ArrayXd base_eval = evaluate_symengine_expr_optimized(pow_expr.get_base(), precomputed_values, temp1, temp2);
+//             return base_eval.pow(exponent);
+//         }
+//     } else {
+//         throw std::runtime_error("Unsupported SymEngine expression type");
+//     }
+
+//     return ArrayXd::Zero(temp1.size());
+// }
+
+// Function to separate terms by + or - not inside parentheses or fractions
+std::vector<std::string> separate_terms(const std::string &expr_str) {
+    std::vector<std::string> terms;
+    std::string term;
+    int depth = 0;
+    for (size_t i = 0; i < expr_str.size(); ++i) {
+        char c = expr_str[i];
+        if (c == '(') depth++;
+        if (c == ')') depth--;
+        if ((c == '+' || c == '-') && depth == 0) {
+            if (!term.empty()) {
+                terms.push_back(term);
+            }
+            term = c; // Start the new term with + or -
+        } else {
+            term += c;
+        }
+    }
+    if (!term.empty()) {
+        terms.push_back(term);
+    }
+    return terms;
+}
+
+// Function to parse the coefficient and base key from a term
+void parse_coefficient_and_key(const std::string &term, double &coefficient, std::string &base_key) {
+    coefficient = 1.0; // Default coefficient
+    base_key = term;   // Default base key is the whole term
+
+    size_t pos = term.find('*');
+    std::string coef_str;
+
+    // Check if the term starts with a variable or an operator
+    if (term[0] != 'x' && term[0] != 'y' && term[0] != 'z') {
+        // Look for a sign at the beginning
+        bool negative = false;
+        if (term[0] == '-') {
+            negative = true;
+            coef_str = term.substr(1, pos - 1);
+        } else if (term[0] == '+') {
+            coef_str = term.substr(1, pos - 1);
+        } else {
+            coef_str = term.substr(0, pos);
+        }
+
+        // Remove leading/trailing whitespaces
+        coef_str.erase(0, coef_str.find_first_not_of(" \n\r\t"));
+        coef_str.erase(coef_str.find_last_not_of(" \n\r\t")+1);
+
+        // Handle coefficient parsing including fractions
+        // std::cout << "coef_str: " << coef_str << endl;
+        if (coef_str[0] == '(') {
+            try {
+                size_t frac_pos = coef_str.find('/');
+                double numerator = std::stod(coef_str.substr(1, frac_pos));
+                double denominator = std::stod(coef_str.substr(frac_pos + 1, coef_str.size() - 1));
+                // std::cout << "numerator: " << numerator << endl;
+                // std::cout << "denominator: " << denominator << endl;
+                
+                coefficient = numerator / denominator;
+            } catch (const std::exception &) {
+                std::cerr << "Invalid coefficient format: " << coef_str << std::endl;
+                coefficient = 1.0;
+            }
+        } else {
+            try {
+                coefficient = std::stod(coef_str);
+            } catch (const std::invalid_argument &) {
+                cout << "Invalid term: " << term << endl;
+                std::cerr << "Invalid coefficient: " << coef_str << std::endl;
+                coefficient = 1.0;
+            }
+        }
+
+        // Apply the negative sign if found at the start
+        if (negative) {
+            coefficient = -coefficient;
+        }
+
+        // The base key should not include the coefficient part
+        if (pos != std::string::npos) {
+            base_key = term.substr(pos + 1);
+        } else {
+            base_key = ""; // In case there is no '*', base_key should be empty if coefficient parsing is correct
         }
     } else {
-        throw std::runtime_error("Unsupported SymEngine expression type");
+        // If the term starts with a variable, the coefficient is implicitly 1
+        coefficient = 1.0;
+        base_key = term;
     }
-    return ArrayXd::Zero(x.size());
+
+    // Trim any leading or trailing whitespace from base_key
+    base_key.erase(base_key.find_last_not_of(" \n\r\t")+1);
+    // base_key.erase(0, base_key.find_first_not_of(" \n\r\t"));
 }
+
+// Function to parse the coefficient and base key from a term
+// Example function to evaluate base expression (to be implemented based on your logic)
+ArrayXd evaluate_base_expression(const std::string &base_key, 
+                                 std::unordered_map<std::string, ArrayXd> &precomputed_values,
+                                 ArrayXd &temp1, ArrayXd &temp2) {
+    // Implement your logic to evaluate the base expression (e.g., "x**2*z") here
+    // This function should return the computed ArrayXd
+    return ArrayXd::Zero(temp1.size()); // Placeholder return
+}
+
+inline ArrayXd evaluate_symengine_expr_optimized(
+    const RCP<const Basic> &expr,
+    std::unordered_map<std::string, ArrayXd> &precomputed_values, // Now passed by reference for modification
+    ArrayXd &temp1, ArrayXd &temp2) {
+
+    std::string expr_str = expr->__str__();
+    // std::cout << "Evaluating expression: " << expr_str << std::endl;
+
+    ArrayXd result(temp1.size());
+    result.setZero();
+
+    // Separate the expression by + or - not inside parentheses or fractions
+    std::vector<std::string> terms = separate_terms(expr_str);
+    bool add_term;
+
+    // Evaluate each term
+    for (std::string term : terms) {
+        double coefficient;
+        std::string base_key;
+        std::string coef_str;
+
+        // std::cout << "Term: " << term << std::endl;
+
+        // Check for leading + or - and adjust accordingly
+        if (!term.empty() && term[0] == '-') {
+            term.erase(0, 1); // Remove the negative sign
+            add_term = false;
+        } else {
+            if (!term.empty() && term[0] == '+') {
+                term.erase(0, 1); // Remove the positive sign
+            }
+            add_term = true;
+        }
+
+        // Remove leading/trailing whitespaces from the term
+        term.erase(0, term.find_first_not_of(" \n\r\t"));
+        term.erase(term.find_last_not_of(" \n\r\t") + 1);
+        // std::cout << "End Term: " << term << std::endl;
+
+        // Check if the base expression is in the precomputed values
+        if (precomputed_values.find(term) != precomputed_values.end()) {
+            if (add_term){
+                result += precomputed_values[term];
+            } else {
+                result -= precomputed_values[term];
+            }
+        } else {
+            // parse_coefficient_and_key(term, coefficient, base_key);
+
+            // Debug print for each term
+            // std::cout << "Term: " << term << ", Coefficient: " << coefficient << ", Base Key: " << base_key << std::endl;
+
+            // test just to see if I use the base values
+
+
+            size_t pos = term.find('*');
+            // Check if the term starts with a variable or an operator
+            coef_str = term.substr(0, pos);
+
+            // Handle coefficient parsing including fractions
+            // std::cout << "coef_str: " << coef_str << endl;
+            if (coef_str[0] == '(') {
+                try {
+                    size_t frac_pos = coef_str.find('/');
+                    double numerator = std::stod(coef_str.substr(1, frac_pos));
+                    double denominator = std::stod(coef_str.substr(frac_pos + 1, coef_str.size() - 1));
+                    // std::cout << "numerator: " << numerator << endl;
+                    // std::cout << "denominator: " << denominator << endl;
+                    
+                    coefficient = numerator / denominator;
+                } catch (const std::exception &) {
+                    std::cerr << "Invalid coefficient format: " << coef_str << std::endl;
+                    coefficient = 1.0;
+                }
+            } else {
+                try {
+                    coefficient = std::stod(coef_str);
+                } catch (const std::invalid_argument &) {
+                    // cout << "Invalid term: " << term << endl;
+                    // std::cerr << "Invalid coefficient: " << coef_str << std::endl;
+                    coefficient = 1.0;
+                }
+            }
+
+
+            // The base key should not include the coefficient part
+            if (pos != std::string::npos) {
+                base_key = term.substr(pos + 1);
+            } else {
+                base_key = ""; // In case there is no '*', base_key should be empty if coefficient parsing is correct
+            }
+            if (precomputed_values.find(base_key) != precomputed_values.end()) {
+                if (add_term){
+                    result += coefficient * precomputed_values[base_key];
+                } else {
+                    result -= coefficient * precomputed_values[base_key];
+                }
+            } else {
+                if (add_term){
+                    result += coefficient;
+                } else {
+                    result -= coefficient;
+                }
+                // std::cerr << "Invalid term: " << term << std::endl;
+            }
+
+
+
+
+
+            // end of new stuff
+            // if (precomputed_values.find(base_key) != precomputed_values.end()) {
+            //     temp1 = coefficient * precomputed_values[base_key];
+            // } else {
+            //     // Handle the case where the base_key is not found in precomputed_values
+            //     temp1 = ArrayXd::Zero(temp1.size()); // Replace with proper evaluation if needed
+            // }
+
+            // if (add_term) {
+            //     result += temp1;
+            // } else {
+            //     result -= temp1;
+            // }
+
+            // precomputed_values[term] = temp1;
+        }
+    }
+
+    // Print all precomputed values
+    // std::cout << "Precomputed values:" << std::endl;
+    // for (const auto &pair : precomputed_values) {
+    //     std::cout << pair.first << std::endl; //" = " << pair.second.transpose() << std::endl; // Print the key and corresponding ArrayXd
+    // }
+
+    return result;
+}
+
 
 // Function to evaluate all unique xyz expressions for a dataset
 void evaluate_unique_xyz_expressions(
@@ -687,17 +1079,34 @@ void evaluate_unique_xyz_expressions_optimized(
     const Eigen::ArrayXd &z_eigen,
     unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> &evaluated_xyz_expressions, int max_exp
 ) {
-    std::vector<ArrayXd> x_powers, y_powers, z_powers;
-    precompute_powers(x_eigen, max_exp, x_powers);
-    precompute_powers(y_eigen, max_exp, y_powers);
-    precompute_powers(z_eigen, max_exp, z_powers);
+    // std::vector<ArrayXd> x_powers, y_powers, z_powers;
+    std::unordered_map<std::string, ArrayXd> precomputed_values;
+    auto start_precompute_powers = std::chrono::high_resolution_clock::now(); // End total timing
+
+    precompute_powers_and_combinations(x_eigen, y_eigen, z_eigen, max_exp, precomputed_values);
+    auto end_precompute_powers = std::chrono::high_resolution_clock::now(); // End total timing
+
+    // Calculate and print elapsed times
+    std::chrono::duration<double> elapsed_precompute_powers = end_precompute_powers - start_precompute_powers;
+    cout << "Time taken for elapsed_precompute_powers: " << elapsed_precompute_powers.count() << " seconds" << endl;
+
+    // precompute_powers(x_eigen, max_exp, x_powers);
+    // precompute_powers(y_eigen, max_exp, y_powers);
+    // precompute_powers(z_eigen, max_exp, z_powers);
+
+    // Print all precomputed values
+    // std::cout << "Precomputed values:" << std::endl;
+    // for (const auto &pair : precomputed_values) {
+    //     std::cout << pair.first << std::endl; //" = " << pair.second.transpose() << std::endl; // Print the key and corresponding ArrayXd
+    // }
 
     ArrayXd temp1(x_eigen.size());
     ArrayXd temp2(x_eigen.size());
     for (const auto &pair : xyz_to_pvars) {
         RCP<const Basic> xyz_expr = pair.first;
         // cout << "Evaluating expression: " << *xyz_expr << " = " << endl;
-        evaluated_xyz_expressions[xyz_expr] = evaluate_symengine_expr_optimized(xyz_expr, x_eigen, y_eigen, z_eigen, x_powers, y_powers, z_powers, temp1, temp2);
+        evaluated_xyz_expressions[xyz_expr] = evaluate_symengine_expr_optimized(xyz_expr, precomputed_values, temp1, temp2);
+        // evaluated_xyz_expressions[xyz_expr] = evaluate_symengine_expr_optimized(xyz_expr, x_eigen, y_eigen, z_eigen, x_powers, y_powers, z_powers, temp1, temp2);
     }
 }
 
@@ -1041,6 +1450,9 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     int degree1 = d1;
     int degree2 = d2;
 
+    auto start_total = std::chrono::high_resolution_clock::now(); // End total timing
+    auto start_func_build = std::chrono::high_resolution_clock::now(); // End timing extraction
+
     // If a load_filename is provided, load the state from the file
     RCP<const Basic> aux_all_sub_expressions_equation;
     RCP<const Basic> symbolic_sum;
@@ -1157,13 +1569,30 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
         // cout >> "aux_all_sub_expressions_equation: " << *aux_all_sub_expressions_equation << endl;
     }
 
+    auto end_func_build = std::chrono::high_resolution_clock::now(); // End timing extraction
+
+    auto start_unique_terms = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
     auto unique_terms = extract_unique_xyz_terms(aux_all_sub_expressions_equation);
+
+    auto end_unique_terms = std::chrono::high_resolution_clock::now(); // End timing extraction
+
+    auto start_decompose = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     // Decompose the main expression into sub-expressions
     auto sub_expressions = separate_sub_expressions(aux_all_sub_expressions_equation);
 
+    auto end_decompose = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
+    auto start_mapping = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
     // Map xyz expressions to P_var expressions
     auto xyz_to_pvars = map_xyz_to_pvars(sub_expressions);
+
+    auto end_mapping = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
+    auto start_precompute = std::chrono::high_resolution_clock::now(); // Start timing precompute
+    auto start_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     // Convert input vectors to Eigen arrays with memory alignment
     Eigen::ArrayXd x_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data_train.data(), x_data_train.size());
@@ -1186,6 +1615,10 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> evaluated_xyz_expressions_test;
 
     evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_test_eigen, y_test_eigen, z_test_eigen, evaluated_xyz_expressions_test, max_exp);
+
+    auto end_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
+    auto start_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
     RCP<const Basic> symbolic_sum_test = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_test);
 
     // calculate the number of samples so SSE is MSE
@@ -1198,6 +1631,8 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     
     // Combine the training and test symbolic sums
     symbolic_sum = add(symbolic_sum_train, symbolic_sum_test);
+    // symbolic_sum = symbolic_sum_train;
+    auto end_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     if (!load_filename.empty()) {
         cout << "combining the old symbolic_sum with the new one" << endl;
@@ -1206,6 +1641,8 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
 
     // Find the largest coefficient
     double max_coeff = find_max_coefficient(symbolic_sum);
+
+    auto start_penalty = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     // A good initial guess for a penalty coeff is 10x that of the largest coeff in the sse
     double penalty_coefficient = penalty_multiplier * max_coeff;
@@ -1217,6 +1654,12 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     for (const auto& penalty_function : penalty_functions) {
         sse_with_penalty = add(sse_with_penalty, penalty_function);
     }
+
+    auto end_penalty = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
+    auto end_precompute = std::chrono::high_resolution_clock::now(); // End timing precompute
+
+    auto start_str_substitution = std::chrono::high_resolution_clock::now(); // Start timing substitution
 
     // Convert sse_with_penalty to string
     std::string sse_with_penalty_str = sse_with_penalty->__str__();
@@ -1249,7 +1692,31 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     if (!save_filename.empty()) {
         save_data(symbolic_sum, aux_all_sub_expressions_equation, aux_dict_final, coefficients_plus1, coefficients_minus1, coefficients_plus2, coefficients_minus2, save_filename);
     }
+    auto end_str_substitution = std::chrono::high_resolution_clock::now(); // End timing substitution
+    auto end_total = std::chrono::high_resolution_clock::now(); // End total timing
 
+    // Calculate and print elapsed times
+    std::chrono::duration<double> elapsed_func_build = end_func_build - start_func_build;
+    std::chrono::duration<double> elapsed_precompute = end_precompute - start_precompute;
+    std::chrono::duration<double> elapsed_unique_terms = end_unique_terms - start_unique_terms;
+    std::chrono::duration<double> elapsed_str_substitution = end_str_substitution - start_str_substitution;
+    std::chrono::duration<double> elapsed_decomposed = end_decompose - start_decompose;
+    std::chrono::duration<double> elapsed_mapping = end_mapping - start_mapping;
+    std::chrono::duration<double> elapsed_eval = end_eval - start_eval;
+    std::chrono::duration<double> elapsed_combineeval = end_combineeval - start_combineeval;
+    std::chrono::duration<double> elapsed_penalty = end_penalty - start_penalty;
+    std::chrono::duration<double> elapsed_total = end_total - start_total;
+
+    cout << "Time taken for function building: " << elapsed_func_build.count() << " seconds" << endl;
+    cout << "Time taken for elapsed_unique_terms: " << elapsed_unique_terms.count() << " seconds" << endl;
+    cout << "Time taken for elapsed_decomposed: " << elapsed_decomposed.count() << " seconds" << endl;
+    cout << "Time taken for elapsed_mapping: " << elapsed_mapping.count() << " seconds" << endl;
+    cout << "Time taken for elapsed_eval: " << elapsed_eval.count() << " seconds" << endl;
+    cout << "Time taken for elapsed_combineeval: " << elapsed_combineeval.count() << " seconds" << endl;
+    cout << "Time taken for elapsed_penalty: " << elapsed_penalty.count() << " seconds" << endl;
+    cout << "Time taken for precomputation of values: " << elapsed_precompute.count() << " seconds" << endl;
+    cout << "Time taken for string substitution: " << elapsed_str_substitution.count() << " seconds" << endl;
+    cout << "Total time taken: " << elapsed_total.count() << " seconds" << endl;
 
     return std::make_tuple(sse_with_penalty_str, aux_dict_str, coeffs_plus1_str, coeffs_minus1_str, coeffs_plus2_str, coeffs_minus2_str);
 }
