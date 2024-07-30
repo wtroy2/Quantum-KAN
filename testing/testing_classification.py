@@ -358,16 +358,27 @@ num_basis_funcs_2 = degree2 + 1
 # Generate example data
 dataset = {}
 dataset_np = {}
-n_training_samples = 100000
-n_test_samples = 10000
-train_input, train_label = make_moons(n_samples=n_training_samples, shuffle=True, noise=0.1, random_state=None)
-test_input, test_label = make_moons(n_samples=n_test_samples, shuffle=True, noise=0.1, random_state=None)
+# n_training_samples = 100000 #5
+# n_test_samples = 10000 #5
+n_training_samples = 5
+n_test_samples = 5
+train_input, train_label = make_moons(n_samples=n_training_samples, shuffle=False, noise=0.0, random_state=None)
+test_input, test_label = make_moons(n_samples=n_test_samples, shuffle=False, noise=0.0, random_state=None)
+
 
 
 dataset_np['train_input'] = torch.from_numpy(train_input)
 dataset_np['test_input'] = torch.from_numpy(test_input)
 dataset_np['train_label'] = torch.from_numpy(train_label[:, None])
 dataset_np['test_label'] = torch.from_numpy(test_label[:, None])
+
+print(f"dataset_np['train_input']: {dataset_np['train_input']}")
+print(f"sum X, Y: {np.sum(train_input, axis=0)}")
+print(f"sum Z: {np.sum(train_label[:, None])}")
+
+print(f"dataset_np['train_label']: {dataset_np['train_label']}")
+print(f"dataset_np['test_input']: {dataset_np['test_input']}")
+print(f"dataset_np['test_label']: {dataset_np['test_label']}")
 
 # Convert the data to torch.float
 train_input = torch.from_numpy(train_input).float()
@@ -432,7 +443,12 @@ result = quantum_kan.compute_mse_with_penalty_categorical(
     z_data_test=z_data_test.tolist(),
     test_multiplier=test_multiplier
 )
-
+print(f"x_data_train.tolist(): {x_data_train.tolist()}")
+print(f"sum x_data_train.tolist(): {sum(x_data_train.tolist())}")
+print(f"y_data_train.tolist(): {y_data_train.tolist()}")
+print(f"sum y_data_train.tolist(): {sum(y_data_train.tolist())}")
+print(f"z_data_train.tolist(): {z_data_train.tolist()}")
+print(f"sum z_data_train.tolist(): {sum(z_data_train.tolist())}")
 mse_with_penalty_str, aux_dict_str, coeffs_plus1_str, coeffs_minus1_str, coeffs_plus2_str, coeffs_minus2_str = result
 
 flattened_coeffs_plus1_str = [item for sublist in coeffs_plus1_str for item in sublist]
@@ -491,5 +507,7 @@ end_time_quantum_part1 = time.perf_counter()
 
 time_quantum_part1 = end_time_quantum_part1 - start_time_quantum_part1
 print(f"Time spent on quantum part 1: {time_quantum_part1}")  # will print the elapsed time in seconds
+
+print(mse_with_penalty_str)
 
 time_simulated_part2, time_simulated_part3, total_time_simulated_optimization, simulated_train_accuracy, simulated_train_precision, simulated_train_recall, simulated_train_f1, simulated_test_accuracy, simulated_test_precision, simulated_test_recall, simulated_test_f1 = run_annealing("SA", simulated_sampler, qubo, chain_strength, time_quantum_part1, num_basis_funcs_1, num_basis_funcs_2, m1, m2, degree1, degree2, x_data_train, y_data_train, z_data_train, x_data_test, y_data_test, z_data_test, dataset, num_reads=3000)

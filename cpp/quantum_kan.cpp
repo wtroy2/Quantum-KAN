@@ -25,13 +25,11 @@
 #include <cmath> // for std::abs
 #include <map>
 #include <omp.h>
-// #include <chrono> // for getting timing values
 #include <Eigen/Dense>
 #include <vector>
 #include <fstream>
 #include "include/json.hpp"
 #include <regex>
-
 
 namespace py = pybind11;
 using namespace SymEngine;
@@ -71,19 +69,6 @@ struct BasicHash {
 
 // Custom equality function for RCP<const Basic>
 struct BasicEqual {
-    bool operator()(const RCP<const Basic>& lhs, const RCP<const Basic>& rhs) const {
-        return eq(*lhs, *rhs);
-    }
-};
-
-
-struct ExpressionHash {
-    std::size_t operator()(const RCP<const Basic>& expr) const {
-        return expr->hash();
-    }
-};
-
-struct ExpressionEqual {
     bool operator()(const RCP<const Basic>& lhs, const RCP<const Basic>& rhs) const {
         return eq(*lhs, *rhs);
     }
@@ -573,46 +558,6 @@ std::unordered_set<RCP<const Basic>, BasicHash, BasicEqual> extract_unique_xyz_t
     return unique_terms;
 }
 
-
-
-// Function to evaluate SymEngine expression and return Eigen array
-Eigen::ArrayXd evaluate_symengine_expr(const RCP<const Basic> &expr, const ArrayXd &x, const ArrayXd &y, const ArrayXd &z) {
-    Eigen::ArrayXd result = Eigen::ArrayXd::Zero(x.size());
-
-    // Evaluate the expression based on its type
-    if (is_a<const Symbol>(*expr)) {
-        if (eq(*expr, *symbol("x"))) {
-            result = x;
-        } else if (eq(*expr, *symbol("y"))) {
-            result = y;
-        } else if (eq(*expr, *symbol("z"))) {
-            result = z;
-        }
-    } else if (is_a<const Add>(*expr)) {
-        for (const auto &arg : expr->get_args()) {
-            result += evaluate_symengine_expr(arg, x, y, z);
-        }
-    } else if (is_a<const Mul>(*expr)) {
-        result.setOnes();
-        for (const auto &arg : expr->get_args()) {
-            result *= evaluate_symengine_expr(arg, x, y, z);
-        }
-    } else if (is_a<const Pow>(*expr)) {
-        const auto &base = static_cast<const Pow &>(*expr).get_base();
-        const auto &exp = static_cast<const Pow &>(*expr).get_exp();
-        Eigen::ArrayXd base_eval = evaluate_symengine_expr(base, x, y, z);
-        double exponent = eval_double(*exp);
-        result = base_eval.pow(exponent);
-    } else if (is_a<const RealDouble>(*expr) || is_a<const Integer>(*expr) || is_a<const Rational>(*expr)) {
-        result = Eigen::ArrayXd::Constant(x.size(), eval_double(*expr));
-    } else {
-        cout << "The unsupported expression: " << *expr << endl;
-        throw runtime_error("Unsupported SymEngine expression type");
-    }
-
-    return result;
-}
-
 void precompute_powers(const ArrayXd &x, int max_exp, std::vector<ArrayXd> &x_powers) {
     x_powers.resize(max_exp + 1);
     x_powers[0] = ArrayXd::Ones(x.size());
@@ -622,22 +567,28 @@ void precompute_powers(const ArrayXd &x, int max_exp, std::vector<ArrayXd> &x_po
 }
 
 void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, int max_exp,
-                                        std::unordered_map<std::string, ArrayXd> &precomputed_values) {
+                                        std::unordered_map<std::string, double> &precomputed_values) {
     // Ensure x, y, z have valid sizes
     if (x.size() == 0 || y.size() == 0 || z.size() == 0) {
         throw std::invalid_argument("Input arrays must have non-zero size.");
     }
+    // cout << "precompute_powers_and_combinations" << endl;
+    // Temporary map to hold ArrayXd values
+    std::unordered_map<std::string, ArrayXd> temp_precomputed_values;
+    // cout << "x: " << x << endl;
+    // cout << "y: " << y << endl;
+
     // std::cout << "starting precompute_powers_and_combinations" << endl;
     // Precompute powers of individual variables
     for (int i = 1; i <= max_exp; ++i) {
         if (i > 1) {
-            precomputed_values["x**" + std::to_string(i)] = x.pow(i);
-            precomputed_values["y**" + std::to_string(i)] = y.pow(i);
-            precomputed_values["z**" + std::to_string(i)] = z.pow(i);
+            temp_precomputed_values["x**" + std::to_string(i)] = x.pow(i);
+            temp_precomputed_values["y**" + std::to_string(i)] = y.pow(i);
+            temp_precomputed_values["z**" + std::to_string(i)] = z.pow(i);
         } else {
-            precomputed_values["x"] = x.pow(i);
-            precomputed_values["y"] = y.pow(i);
-            precomputed_values["z"] = z.pow(i);     
+            temp_precomputed_values["x"] = x.pow(i);
+            temp_precomputed_values["y"] = y.pow(i);
+            temp_precomputed_values["z"] = z.pow(i);     
         }
     }
 
@@ -662,155 +613,73 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
                     temp = std::to_string(i);
                     if (temp != "1"){
                         key += "x**" + temp;
-                        product *= precomputed_values["x**" + temp];
+                        product *= temp_precomputed_values["x**" + temp];
                     } else {
                         key += "x";
-                        product *= precomputed_values["x"];
+                        product *= temp_precomputed_values["x"];
                     }
                     if (j > 0) {
                         temp = std::to_string(j);
                         if (temp != "1"){
                             key += "*y**" + temp;
-                            product *= precomputed_values["y**" + temp];
+                            product *= temp_precomputed_values["y**" + temp];
                         } else {
                             key += "*y";
-                            product *= precomputed_values["y"];
+                            product *= temp_precomputed_values["y"];
                         }
                     }
                     if (k > 0) {
                         temp = std::to_string(k);
                         if (temp != "1"){
                             key += "*z**" + temp;
-                            product *= precomputed_values["z**" + temp];
+                            product *= temp_precomputed_values["z**" + temp];
                         } else {
                             key += "*z";
-                            product *= precomputed_values["z"];
+                            product *= temp_precomputed_values["z"];
                         }
                     }
                 } else if (j > 0) {
                     temp = std::to_string(j);
                     if (temp != "1"){
                         key += "y**" + temp;
-                        product *= precomputed_values["y**" + temp];
+                        product *= temp_precomputed_values["y**" + temp];
                     } else {
                         key += "y";
-                        product *= precomputed_values["y"];
+                        product *= temp_precomputed_values["y"];
                     }
                     if (k > 0) {
                         temp = std::to_string(k);
                         if (temp != "1"){
                             key += "*z**" + temp;
-                            product *= precomputed_values["z**" + temp];
+                            product *= temp_precomputed_values["z**" + temp];
                         } else {
                             key += "*z";
-                            product *= precomputed_values["z"];
+                            product *= temp_precomputed_values["z"];
                         }
                     }
                 } else if (k > 0) {
                     temp = std::to_string(k);
                     if (temp != "1"){
                         key += "z**" + temp;
-                        product *= precomputed_values["z**" + temp];
+                        product *= temp_precomputed_values["z**" + temp];
                     } else {
                         key += "z";
-                        product *= precomputed_values["z"];
+                        product *= temp_precomputed_values["z"];
                     }
                 }
 
-                precomputed_values[key] = product;
+                temp_precomputed_values[key] = product;
             }
         }
     }
+    // Now compute the sums and store in precomputed_values
+    for (const auto& pair : temp_precomputed_values) {
+        precomputed_values[pair.first] = pair.second.sum();
+        // cout << "pair: " << pair.first << " temp_precomputed_values: " << pair.second.sum() << endl;
+        // cout << "pair: " << pair.first << " temp_precomputed_values: " << pair.second << endl;
+    }
+    precomputed_values["array_size"] = x.size();
 }
-
-// inline ArrayXd evaluate_symengine_expr_optimized(const RCP<const Basic> &expr, const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, 
-//                                           const std::vector<ArrayXd> &x_powers, const std::vector<ArrayXd> &y_powers, const std::vector<ArrayXd> &z_powers,
-//                                           ArrayXd &temp1, ArrayXd &temp2) {
-//     if (is_a<const Symbol>(*expr)) {
-//         const Symbol &sym = static_cast<const Symbol &>(*expr);
-//         if (eq(sym, *symbol("x"))) {
-//             return x;
-//         } else if (eq(sym, *symbol("y"))) {
-//             return y;
-//         } else if (eq(sym, *symbol("z"))) {
-//             return z;
-//         }
-//     } else if (is_a<const RealDouble>(*expr) || is_a<const Integer>(*expr) || is_a<const Rational>(*expr)) {
-//         return ArrayXd::Constant(x.size(), eval_double(*expr));
-//     } else if (is_a<const Add>(*expr)) {
-//         temp1.setZero();
-//         for (const auto &arg : expr->get_args()) {
-//             temp1 += evaluate_symengine_expr_optimized(arg, x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
-//         }
-//         return temp1;
-//     } else if (is_a<const Mul>(*expr)) {
-//         temp2.setOnes();
-//         for (const auto &arg : expr->get_args()) {
-//             temp2 *= evaluate_symengine_expr_optimized(arg, x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
-//         }
-//         return temp2;
-//     } else if (is_a<const Pow>(*expr)) {
-//         const auto &pow_expr = static_cast<const Pow &>(*expr);
-//         ArrayXd base_eval = evaluate_symengine_expr_optimized(pow_expr.get_base(), x, y, z, x_powers, y_powers, z_powers, temp1, temp2);
-//         double exponent = eval_double(*pow_expr.get_exp());
-//         if (eq(*pow_expr.get_base(), *symbol("x")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < x_powers.size()) {
-//             return x_powers[static_cast<int>(exponent)];
-//         } else if (eq(*pow_expr.get_base(), *symbol("y")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < y_powers.size()) {
-//             return y_powers[static_cast<int>(exponent)];
-//         } else if (eq(*pow_expr.get_base(), *symbol("z")) && exponent == static_cast<int>(exponent) && exponent >= 0 && exponent < z_powers.size()) {
-//             return z_powers[static_cast<int>(exponent)];
-//         } else {
-//             return base_eval.pow(exponent);
-//         }
-//     } else {
-//         throw std::runtime_error("Unsupported SymEngine expression type");
-//     }
-//     return ArrayXd::Zero(x.size());
-// }
-
-// inline ArrayXd evaluate_symengine_expr_optimized(
-//     const RCP<const Basic> &expr,
-//     const std::unordered_map<std::string, ArrayXd> &precomputed_values,
-//     ArrayXd &temp1, ArrayXd &temp2) {
-    
-//     if (is_a<const Symbol>(*expr)) {
-//         const Symbol &sym = static_cast<const Symbol &>(*expr);
-//         std::string name = sym.get_name();
-//         if (precomputed_values.count(name)) {
-//             return precomputed_values.at(name);
-//         }
-//     } else if (is_a<const RealDouble>(*expr) || is_a<const Integer>(*expr) || is_a<const Rational>(*expr)) {
-//         return ArrayXd::Constant(temp1.size(), eval_double(*expr));
-//     } else if (is_a<const Add>(*expr)) {
-//         temp1.setZero();
-//         for (const auto &arg : expr->get_args()) {
-//             temp1 += evaluate_symengine_expr_optimized(arg, precomputed_values, temp1, temp2);
-//         }
-//         return temp1;
-//     } else if (is_a<const Mul>(*expr)) {
-//         temp2.setOnes();
-//         for (const auto &arg : expr->get_args()) {
-//             temp2 *= evaluate_symengine_expr_optimized(arg, precomputed_values, temp1, temp2);
-//         }
-//         return temp2;
-//     } else if (is_a<const Pow>(*expr)) {
-//         const auto &pow_expr = static_cast<const Pow &>(*expr);
-//         std::string base_str = pow_expr.get_base()->__str__();
-//         double exponent = eval_double(*pow_expr.get_exp());
-//         std::string key = base_str + std::to_string(static_cast<int>(exponent));
-
-//         if (precomputed_values.count(key)) {
-//             return precomputed_values.at(key);
-//         } else {
-//             ArrayXd base_eval = evaluate_symengine_expr_optimized(pow_expr.get_base(), precomputed_values, temp1, temp2);
-//             return base_eval.pow(exponent);
-//         }
-//     } else {
-//         throw std::runtime_error("Unsupported SymEngine expression type");
-//     }
-
-//     return ArrayXd::Zero(temp1.size());
-// }
 
 // Function to separate terms by + or - not inside parentheses or fractions
 std::vector<std::string> separate_terms(const std::string &expr_str) {
@@ -836,282 +705,180 @@ std::vector<std::string> separate_terms(const std::string &expr_str) {
     return terms;
 }
 
-// Function to parse the coefficient and base key from a term
-void parse_coefficient_and_key(const std::string &term, double &coefficient, std::string &base_key) {
-    coefficient = 1.0; // Default coefficient
-    base_key = term;   // Default base key is the whole term
+inline const double evaluate_symengine_expr_optimized(
+    const std::string &expr,
+    const std::unordered_map<std::string, double> &precomputed_values,
+    double &temp1) {
 
-    size_t pos = term.find('*');
-    std::string coef_str;
-
-    // Check if the term starts with a variable or an operator
-    if (term[0] != 'x' && term[0] != 'y' && term[0] != 'z') {
-        // Look for a sign at the beginning
-        bool negative = false;
-        if (term[0] == '-') {
-            negative = true;
-            coef_str = term.substr(1, pos - 1);
-        } else if (term[0] == '+') {
-            coef_str = term.substr(1, pos - 1);
-        } else {
-            coef_str = term.substr(0, pos);
-        }
-
-        // Remove leading/trailing whitespaces
-        coef_str.erase(0, coef_str.find_first_not_of(" \n\r\t"));
-        coef_str.erase(coef_str.find_last_not_of(" \n\r\t")+1);
-
-        // Handle coefficient parsing including fractions
-        // std::cout << "coef_str: " << coef_str << endl;
-        if (coef_str[0] == '(') {
-            try {
-                size_t frac_pos = coef_str.find('/');
-                double numerator = std::stod(coef_str.substr(1, frac_pos));
-                double denominator = std::stod(coef_str.substr(frac_pos + 1, coef_str.size() - 1));
-                // std::cout << "numerator: " << numerator << endl;
-                // std::cout << "denominator: " << denominator << endl;
-                
-                coefficient = numerator / denominator;
-            } catch (const std::exception &) {
-                std::cerr << "Invalid coefficient format: " << coef_str << std::endl;
-                coefficient = 1.0;
-            }
-        } else {
-            try {
-                coefficient = std::stod(coef_str);
-            } catch (const std::invalid_argument &) {
-                cout << "Invalid term: " << term << endl;
-                std::cerr << "Invalid coefficient: " << coef_str << std::endl;
-                coefficient = 1.0;
-            }
-        }
-
-        // Apply the negative sign if found at the start
-        if (negative) {
-            coefficient = -coefficient;
-        }
-
-        // The base key should not include the coefficient part
-        if (pos != std::string::npos) {
-            base_key = term.substr(pos + 1);
-        } else {
-            base_key = ""; // In case there is no '*', base_key should be empty if coefficient parsing is correct
-        }
-    } else {
-        // If the term starts with a variable, the coefficient is implicitly 1
-        coefficient = 1.0;
-        base_key = term;
-    }
-
-    // Trim any leading or trailing whitespace from base_key
-    base_key.erase(base_key.find_last_not_of(" \n\r\t")+1);
-    // base_key.erase(0, base_key.find_first_not_of(" \n\r\t"));
-}
-
-// Function to parse the coefficient and base key from a term
-// Example function to evaluate base expression (to be implemented based on your logic)
-ArrayXd evaluate_base_expression(const std::string &base_key, 
-                                 std::unordered_map<std::string, ArrayXd> &precomputed_values,
-                                 ArrayXd &temp1, ArrayXd &temp2) {
-    // Implement your logic to evaluate the base expression (e.g., "x**2*z") here
-    // This function should return the computed ArrayXd
-    return ArrayXd::Zero(temp1.size()); // Placeholder return
-}
-
-inline ArrayXd evaluate_symengine_expr_optimized(
-    const RCP<const Basic> &expr,
-    std::unordered_map<std::string, ArrayXd> &precomputed_values, // Now passed by reference for modification
-    ArrayXd &temp1, ArrayXd &temp2) {
-
-    std::string expr_str = expr->__str__();
-    // std::cout << "Evaluating expression: " << expr_str << std::endl;
-
-    ArrayXd result(temp1.size());
-    result.setZero();
+    temp1 = 0.0;
 
     // Separate the expression by + or - not inside parentheses or fractions
-    std::vector<std::string> terms = separate_terms(expr_str);
-    bool add_term;
+    std::vector<std::string> terms = separate_terms(expr);
 
-    // Evaluate each term
-    for (std::string term : terms) {
-        double coefficient;
+    for (std::string &term : terms) {
+        // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+        //     cout << term << endl;
+        // }
+        double coefficient = 1.0;
         std::string base_key;
-        std::string coef_str;
+        bool add_term = true;
 
-        // std::cout << "Term: " << term << std::endl;
-
-        // Check for leading + or - and adjust accordingly
-        if (!term.empty() && term[0] == '-') {
-            term.erase(0, 1); // Remove the negative sign
+        if (term[0] == '-') {
+            term.erase(0, 1);
             add_term = false;
-        } else {
-            if (!term.empty() && term[0] == '+') {
-                term.erase(0, 1); // Remove the positive sign
-            }
-            add_term = true;
+        } else if (term[0] == '+') {
+            term.erase(0, 1);
         }
 
-        // Remove leading/trailing whitespaces from the term
+        // this term.erase is expensive. get rid of it if possible
         term.erase(0, term.find_first_not_of(" \n\r\t"));
         term.erase(term.find_last_not_of(" \n\r\t") + 1);
-        // std::cout << "End Term: " << term << std::endl;
 
-        // Check if the base expression is in the precomputed values
-        if (precomputed_values.find(term) != precomputed_values.end()) {
-            if (add_term){
-                result += precomputed_values[term];
+        auto it = precomputed_values.find(term);
+        if (it != precomputed_values.end()) {
+            const double& value = it->second;
+            if (add_term) {
+                temp1 += value;
+                // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                //     cout << value << endl;
+                // }
             } else {
-                result -= precomputed_values[term];
+                temp1 -= value;
+                // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                //     cout << '-' << value << endl;
+                // }
             }
         } else {
-            // parse_coefficient_and_key(term, coefficient, base_key);
-
-            // Debug print for each term
-            // std::cout << "Term: " << term << ", Coefficient: " << coefficient << ", Base Key: " << base_key << std::endl;
-
-            // test just to see if I use the base values
-
-
             size_t pos = term.find('*');
-            // Check if the term starts with a variable or an operator
-            coef_str = term.substr(0, pos);
-
-            // Handle coefficient parsing including fractions
-            // std::cout << "coef_str: " << coef_str << endl;
-            if (coef_str[0] == '(') {
+            std::string coef_str = (pos != std::string::npos) ? term.substr(0, pos) : "";
+            base_key = (pos != std::string::npos) ? term.substr(pos + 1) : term;
+            // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+            //     cout << "coef_str: " << coef_str << "base_key is: " << base_key << endl;
+            // }
+            if (!coef_str.empty()) {
                 try {
-                    size_t frac_pos = coef_str.find('/');
-                    double numerator = std::stod(coef_str.substr(1, frac_pos));
-                    double denominator = std::stod(coef_str.substr(frac_pos + 1, coef_str.size() - 1));
-                    // std::cout << "numerator: " << numerator << endl;
-                    // std::cout << "denominator: " << denominator << endl;
-                    
-                    coefficient = numerator / denominator;
+                    if (coef_str[0] == '(') {
+                        size_t frac_pos = coef_str.find('/');
+                        double numerator = std::stod(coef_str.substr(1, frac_pos));
+                        double denominator = std::stod(coef_str.substr(frac_pos + 1, coef_str.size() - 2));
+                        coefficient = numerator / denominator;
+                    } else {
+                        coefficient = std::stod(coef_str);
+                        // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                        //     cout << "coef_str: " << coef_str << "coef is: " << coefficient << endl;
+                        // }
+                    }
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "found coef_str: " << coefficient << endl;
+                    // }
                 } catch (const std::exception &) {
-                    std::cerr << "Invalid coefficient format: " << coef_str << std::endl;
                     coefficient = 1.0;
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "did NOT found coef_str: " << coefficient << endl;
+                    // }
                 }
             } else {
                 try {
-                    coefficient = std::stod(coef_str);
-                } catch (const std::invalid_argument &) {
-                    // cout << "Invalid term: " << term << endl;
-                    // std::cerr << "Invalid coefficient: " << coef_str << std::endl;
+                    if (base_key[0] == '(') {
+                        size_t frac_pos = base_key.find('/');
+                        double numerator = std::stod(base_key.substr(1, frac_pos));
+                        double denominator = std::stod(base_key.substr(frac_pos + 1, base_key.size() - 2));
+                        coefficient = numerator / denominator;
+                    } else {
+                        coefficient = std::stod(base_key);
+                        // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                        //     cout << "base_key: " << base_key << "coef is: " << coefficient << endl;
+                        // }
+                    }
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "found base_key: " << coefficient << endl;
+                    // }
+                } catch (const std::exception &) {
                     coefficient = 1.0;
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "did NOT found base_key: " << coefficient << endl;
+                    // }
                 }
             }
 
-
-            // The base key should not include the coefficient part
-            if (pos != std::string::npos) {
-                base_key = term.substr(pos + 1);
-            } else {
-                base_key = ""; // In case there is no '*', base_key should be empty if coefficient parsing is correct
-            }
-            if (precomputed_values.find(base_key) != precomputed_values.end()) {
-                if (add_term){
-                    result += coefficient * precomputed_values[base_key];
+            auto base_it = precomputed_values.find(base_key);
+            if (base_it != precomputed_values.end()) {
+                const double& base_value = base_it->second;
+                if (add_term) {
+                    temp1 += coefficient * base_value;
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "coefficient: " << coefficient << " value: " << base_value << endl;
+                    // }
                 } else {
-                    result -= coefficient * precomputed_values[base_key];
+                    temp1 -= coefficient * base_value;
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "coefficient: -" << coefficient << " value: " << base_value << endl;
+                    // }
                 }
             } else {
-                if (add_term){
-                    result += coefficient;
+                if (add_term) {
+                    temp1 += coefficient * precomputed_values.find("array_size")->second;
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "coefficient: " << coefficient << endl;
+                    // }
                 } else {
-                    result -= coefficient;
+                    temp1 -= coefficient * precomputed_values.find("array_size")->second;
+                    // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+                    //     cout << "coefficient: -" << coefficient << endl;
+                    // }
                 }
-                // std::cerr << "Invalid term: " << term << std::endl;
             }
-
-
-
-
-
-            // end of new stuff
-            // if (precomputed_values.find(base_key) != precomputed_values.end()) {
-            //     temp1 = coefficient * precomputed_values[base_key];
-            // } else {
-            //     // Handle the case where the base_key is not found in precomputed_values
-            //     temp1 = ArrayXd::Zero(temp1.size()); // Replace with proper evaluation if needed
-            // }
-
-            // if (add_term) {
-            //     result += temp1;
-            // } else {
-            //     result -= temp1;
-            // }
-
-            // precomputed_values[term] = temp1;
         }
+        // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
+        //     cout << "temp1: " << temp1 << endl;
+        // }
     }
 
-    // Print all precomputed values
-    // std::cout << "Precomputed values:" << std::endl;
-    // for (const auto &pair : precomputed_values) {
-    //     std::cout << pair.first << std::endl; //" = " << pair.second.transpose() << std::endl; // Print the key and corresponding ArrayXd
-    // }
-
-    return result;
+    return temp1;
 }
-
 
 // Function to evaluate all unique xyz expressions for a dataset
-void evaluate_unique_xyz_expressions(
-    const unordered_map<RCP<const Basic>, vector<RCP<const Basic>>, BasicHash, BasicEqual> &xyz_to_pvars,
-    const Eigen::ArrayXd &x_eigen,
-    const Eigen::ArrayXd &y_eigen,
-    const Eigen::ArrayXd &z_eigen,
-    unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> &evaluated_xyz_expressions
-) {
-    std::vector<ArrayXd> x_powers, y_powers, z_powers;
-    for (const auto &pair : xyz_to_pvars) {
-        RCP<const Basic> xyz_expr = pair.first;
-        // cout << "Evaluating expression: " << *xyz_expr << " = " << endl;
-        evaluated_xyz_expressions[xyz_expr] = evaluate_symengine_expr(xyz_expr, x_eigen, y_eigen, z_eigen);
-    }
-}
-
 void evaluate_unique_xyz_expressions_optimized(
-    const unordered_map<RCP<const Basic>, vector<RCP<const Basic>>, BasicHash, BasicEqual> &xyz_to_pvars,
+    const unordered_map<std::string, vector<RCP<const Basic>>> &xyz_to_pvars,
     const Eigen::ArrayXd &x_eigen,
     const Eigen::ArrayXd &y_eigen,
     const Eigen::ArrayXd &z_eigen,
-    unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> &evaluated_xyz_expressions, int max_exp
+    std::unordered_map<std::string, double> &evaluated_xyz_expressions, int max_exp
 ) {
-    // std::vector<ArrayXd> x_powers, y_powers, z_powers;
-    std::unordered_map<std::string, ArrayXd> precomputed_values;
-    auto start_precompute_powers = std::chrono::high_resolution_clock::now(); // End total timing
+    std::unordered_map<std::string, double> precomputed_values;
+    // auto start_precompute_powers = std::chrono::high_resolution_clock::now(); 
 
     precompute_powers_and_combinations(x_eigen, y_eigen, z_eigen, max_exp, precomputed_values);
-    auto end_precompute_powers = std::chrono::high_resolution_clock::now(); // End total timing
+    // auto end_precompute_powers = std::chrono::high_resolution_clock::now(); 
 
-    // Calculate and print elapsed times
-    std::chrono::duration<double> elapsed_precompute_powers = end_precompute_powers - start_precompute_powers;
-    cout << "Time taken for elapsed_precompute_powers: " << elapsed_precompute_powers.count() << " seconds" << endl;
+    // std::chrono::duration<double> elapsed_precompute_powers = end_precompute_powers - start_precompute_powers;
+    // std::cout << "Time taken for precompute_powers: " << elapsed_precompute_powers.count() << " seconds" << std::endl;
 
-    // precompute_powers(x_eigen, max_exp, x_powers);
-    // precompute_powers(y_eigen, max_exp, y_powers);
-    // precompute_powers(z_eigen, max_exp, z_powers);
+    // Print the contents of xyz_to_pvars
+    // for (const auto &pair : xyz_to_pvars) {
+    //     std::string key = pair.first;
+    //     const vector<RCP<const Basic>> &value = pair.second;
 
-    // Print all precomputed values
-    // std::cout << "Precomputed values:" << std::endl;
-    // for (const auto &pair : precomputed_values) {
-    //     std::cout << pair.first << std::endl; //" = " << pair.second.transpose() << std::endl; // Print the key and corresponding ArrayXd
+    //     std::cout << "Key: " << key << std::endl;
+    //     std::cout << "Values: ";
+    //     for (const auto &val : value) {
+    //         std::cout << val->__str__() << " ";
+    //     }
+    //     std::cout << std::endl;
     // }
+    evaluated_xyz_expressions.reserve(xyz_to_pvars.size()); // Reserve space if possible
 
-    ArrayXd temp1(x_eigen.size());
-    ArrayXd temp2(x_eigen.size());
+
+    double temp1;
     for (const auto &pair : xyz_to_pvars) {
-        RCP<const Basic> xyz_expr = pair.first;
-        // cout << "Evaluating expression: " << *xyz_expr << " = " << endl;
-        evaluated_xyz_expressions[xyz_expr] = evaluate_symengine_expr_optimized(xyz_expr, precomputed_values, temp1, temp2);
-        // evaluated_xyz_expressions[xyz_expr] = evaluate_symengine_expr_optimized(xyz_expr, x_eigen, y_eigen, z_eigen, x_powers, y_powers, z_powers, temp1, temp2);
+        // std::string xyz_expr = pair.first;
+        evaluated_xyz_expressions[pair.first] = evaluate_symengine_expr_optimized(pair.first, precomputed_values, temp1);
+        // evaluated_xyz_expressions[xyz_expr] = std::move(temp1);
     }
 }
 
-unordered_map<RCP<const Basic>, vector<RCP<const Basic>>, BasicHash, BasicEqual> map_xyz_to_pvars(const vector<RCP<const Basic>>& sub_expressions) {
-    unordered_map<RCP<const Basic>, vector<RCP<const Basic>>, BasicHash, BasicEqual> xyz_to_pvars;
+std::unordered_map<std::string, vector<RCP<const Basic>>> map_xyz_to_pvars(const vector<RCP<const Basic>>& sub_expressions) {
+    std::unordered_map<std::string, vector<RCP<const Basic>>> xyz_to_pvars;
 
     for (const auto& expr : sub_expressions) {
         vec_basic xyz_terms;
@@ -1134,7 +901,7 @@ unordered_map<RCP<const Basic>, vector<RCP<const Basic>>, BasicHash, BasicEqual>
         RCP<const Basic> xyz_expr = xyz_terms.empty() ? expr : mul(xyz_terms);
         RCP<const Basic> p_var_expr = p_var_terms.empty() ? static_cast<RCP<const Basic>>(one) : mul(p_var_terms);
 
-        xyz_to_pvars[xyz_expr].push_back(p_var_expr);
+        xyz_to_pvars[xyz_expr->__str__()].push_back(p_var_expr);
     }
 
     return xyz_to_pvars;
@@ -1142,21 +909,35 @@ unordered_map<RCP<const Basic>, vector<RCP<const Basic>>, BasicHash, BasicEqual>
 
 // Function to evaluate and combine expressions for a dataset
 RCP<const Basic> evaluate_and_combine(
-    const unordered_map<RCP<const Basic>, vector<RCP<const Basic>>, BasicHash, BasicEqual> &xyz_to_pvars,
-    const unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> &evaluated_xyz_expressions
+    const unordered_map<std::string, vector<RCP<const Basic>>> &xyz_to_pvars,
+    const unordered_map<std::string, double> &evaluated_xyz_expressions
 ) {
+    // auto start_evaluate_and_combine = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
     RCP<const Basic> final_result = zero;
 
     for (const auto &pair : xyz_to_pvars) {
-        RCP<const Basic> xyz_expr = pair.first;
         const auto &p_vars = pair.second;
-        const Eigen::ArrayXd &evaluated_values = evaluated_xyz_expressions.at(xyz_expr);
+        const double &evaluated_value = evaluated_xyz_expressions.at(pair.first);
+        RCP<const RealDouble> multiplier = real_double(evaluated_value);
 
-        double sum = evaluated_values.sum();
+        // Temporary accumulation to minimize add calls. This doesnt seem like it would significantly speedup the code but it does.
+        RCP<const Basic> temp_result = zero;
+
+        // double sum = evaluated_values.sum();
         for (const auto &p_var_expr : p_vars) {
-            final_result = add(final_result, mul(real_double(sum), p_var_expr));
+            // final_result = add(final_result, mul(multiplier, p_var_expr));
+            // RCP<const Basic> product = mul(multiplier, p_var_expr);
+            temp_result = add(temp_result, mul(multiplier, p_var_expr));
         }
+        final_result = add(final_result, temp_result);
     }
+
+    // auto end_evaluate_and_combine = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
+    // std::chrono::duration<double> elapsed_evaluate_and_combine = end_evaluate_and_combine - start_evaluate_and_combine;
+
+    // cout << "Time taken for evaluate_and_combine: " << elapsed_evaluate_and_combine.count() << " seconds" << endl;
 
     return final_result;
 }
@@ -1379,15 +1160,6 @@ void load_data_2_layer(
     coefficients_plus3 = convert_json_to_coefficients(j["coefficients_plus3"]);
 }
 
-// // Function to precompute powers
-// unordered_map<int, RCP<const Basic>> precompute_powers(const RCP<const Basic>& expr, int max_power) {
-//     unordered_map<int, RCP<const Basic>> powers;
-//     for (int i = 1; i <= max_power; ++i) {
-//         powers[i] = replace_binary_powers(expand(pow(expr, integer(i))));
-//     }
-//     return powers;
-// }
-
 // Function to precompute powers and apply auxiliary variables
 unordered_map<int, RCP<const Basic>> precompute_powers(const RCP<const Basic>& expr, int max_power, unordered_map<RCP<const Basic>, RCP<const Basic>>& aux_dict, bool isTop) {
     unordered_map<int, RCP<const Basic>> powers;
@@ -1598,28 +1370,38 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     Eigen::ArrayXd x_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data_train.data(), x_data_train.size());
     Eigen::ArrayXd y_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data_train.data(), y_data_train.size());
     Eigen::ArrayXd z_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data_train.data(), z_data_train.size());
-
+    // cout << "x_data_train: " << endl;
+    // // Range-based for loop to print all elements
+    // for (const double& value : x_data_train) {
+    //     std::cout << value << " ";
+    // }
+    // std::cout << std::endl;
+    // cout << "x_train_eigen: " << x_train_eigen << endl;
     // Evaluate expressions for training data
-    unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> evaluated_xyz_expressions_train;
+    std::unordered_map<std::string, double> evaluated_xyz_expressions_train;
     int max_degree = max(d1, d2); // Use std::max to get the maximum value
     int max_exp = max_degree * 2;
 
+    auto start_train_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
+
     evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_train_eigen, y_train_eigen, z_train_eigen, evaluated_xyz_expressions_train, max_exp);
-    RCP<const Basic> symbolic_sum_train = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_train);
+    // RCP<const Basic> symbolic_sum_train = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_train);
+    auto end_train_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     Eigen::ArrayXd x_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data_test.data(), x_data_test.size());
     Eigen::ArrayXd y_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data_test.data(), y_data_test.size());
     Eigen::ArrayXd z_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data_test.data(), z_data_test.size());
 
     // Evaluate expressions for test data
-    unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> evaluated_xyz_expressions_test;
+    std::unordered_map<std::string, double>  evaluated_xyz_expressions_test;
 
     evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_test_eigen, y_test_eigen, z_test_eigen, evaluated_xyz_expressions_test, max_exp);
 
     auto end_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
     auto start_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
+    RCP<const Basic> symbolic_sum_train = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_train);
     RCP<const Basic> symbolic_sum_test = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_test);
+    auto end_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     // calculate the number of samples so SSE is MSE
     double mean_transformer = 1.0 / x_data_test.size();
@@ -1632,7 +1414,7 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     // Combine the training and test symbolic sums
     symbolic_sum = add(symbolic_sum_train, symbolic_sum_test);
     // symbolic_sum = symbolic_sum_train;
-    auto end_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
+    // auto end_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     if (!load_filename.empty()) {
         cout << "combining the old symbolic_sum with the new one" << endl;
@@ -1703,6 +1485,7 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     std::chrono::duration<double> elapsed_decomposed = end_decompose - start_decompose;
     std::chrono::duration<double> elapsed_mapping = end_mapping - start_mapping;
     std::chrono::duration<double> elapsed_eval = end_eval - start_eval;
+    std::chrono::duration<double> elapsed_train_eval = end_train_eval - start_train_eval;
     std::chrono::duration<double> elapsed_combineeval = end_combineeval - start_combineeval;
     std::chrono::duration<double> elapsed_penalty = end_penalty - start_penalty;
     std::chrono::duration<double> elapsed_total = end_total - start_total;
@@ -1712,277 +1495,278 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     cout << "Time taken for elapsed_decomposed: " << elapsed_decomposed.count() << " seconds" << endl;
     cout << "Time taken for elapsed_mapping: " << elapsed_mapping.count() << " seconds" << endl;
     cout << "Time taken for elapsed_eval: " << elapsed_eval.count() << " seconds" << endl;
+    cout << "Time taken for elapsed_train_eval: " << elapsed_train_eval.count() << " seconds" << endl;
     cout << "Time taken for elapsed_combineeval: " << elapsed_combineeval.count() << " seconds" << endl;
     cout << "Time taken for elapsed_penalty: " << elapsed_penalty.count() << " seconds" << endl;
     cout << "Time taken for precomputation of values: " << elapsed_precompute.count() << " seconds" << endl;
     cout << "Time taken for string substitution: " << elapsed_str_substitution.count() << " seconds" << endl;
     cout << "Total time taken: " << elapsed_total.count() << " seconds" << endl;
-
     return std::make_tuple(sse_with_penalty_str, aux_dict_str, coeffs_plus1_str, coeffs_minus1_str, coeffs_plus2_str, coeffs_minus2_str);
 }
 
-std::tuple<std::string, std::unordered_map<std::string, std::string>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>>
-compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, double penalty_multiplier, double bias_coefficient, bool is_fractional, const std::vector<double>& x_data, const std::vector<double>& y_data, const std::vector<double>& z_data,  const std::string& load_filename = "", const std::string& save_filename = "") {
-    int degree1 = d1;
-    int degree2 = d2;
-    int degree3 = d3;
 
-    // If a load_filename is provided, load the state from the file
-    RCP<const Basic> aux_all_sub_expressions_equation;
-    RCP<const Basic> symbolic_sum_no_mean;
-    RCP<const Basic> preloaded_symbolic_sum;
-    unordered_map<RCP<const Basic>, RCP<const Basic>> aux_dict_final;
-    vector<vector<RCP<const Basic>>> coefficients_plus1, coefficients_plus2, coefficients_plus3;
-    int x_data_size = x_data.size();
-    int x_data_size_old;
+// std::tuple<std::string, std::unordered_map<std::string, std::string>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>>
+// compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, double penalty_multiplier, double bias_coefficient, bool is_fractional, const std::vector<double>& x_data, const std::vector<double>& y_data, const std::vector<double>& z_data,  const std::string& load_filename = "", const std::string& save_filename = "") {
+//     int degree1 = d1;
+//     int degree2 = d2;
+//     int degree3 = d3;
 
-    if (!load_filename.empty()) {
-        load_data_2_layer(preloaded_symbolic_sum, x_data_size_old, aux_all_sub_expressions_equation, aux_dict_final, coefficients_plus1, coefficients_plus2, coefficients_plus3, load_filename);
-        x_data_size = x_data_size + x_data_size_old;
-    } else {
-        // Define symbolic binary variables for the coefficients
-        coefficients_plus1.resize(degree1 + 1, vector<RCP<const Basic>>(m1));
-        coefficients_plus2.resize(degree2 + 1, vector<RCP<const Basic>>(m2));
-        coefficients_plus3.resize(degree3 + 1, vector<RCP<const Basic>>(m3));
-        // initialize_coefficients();
+//     // If a load_filename is provided, load the state from the file
+//     RCP<const Basic> aux_all_sub_expressions_equation;
+//     RCP<const Basic> symbolic_sum_no_mean;
+//     RCP<const Basic> preloaded_symbolic_sum;
+//     unordered_map<RCP<const Basic>, RCP<const Basic>> aux_dict_final;
+//     vector<vector<RCP<const Basic>>> coefficients_plus1, coefficients_plus2, coefficients_plus3;
+//     int x_data_size = x_data.size();
+//     int x_data_size_old;
 
-        for (int i = 0; i <= degree1; ++i) {
-            for (int j = 0; j < m1; ++j) {
-                coefficients_plus1[i][j] = binary("P1_" + to_string(i) + "_plus_" + to_string(j));
-            }
-        }
+//     if (!load_filename.empty()) {
+//         load_data_2_layer(preloaded_symbolic_sum, x_data_size_old, aux_all_sub_expressions_equation, aux_dict_final, coefficients_plus1, coefficients_plus2, coefficients_plus3, load_filename);
+//         x_data_size = x_data_size + x_data_size_old;
+//     } else {
+//         // Define symbolic binary variables for the coefficients
+//         coefficients_plus1.resize(degree1 + 1, vector<RCP<const Basic>>(m1));
+//         coefficients_plus2.resize(degree2 + 1, vector<RCP<const Basic>>(m2));
+//         coefficients_plus3.resize(degree3 + 1, vector<RCP<const Basic>>(m3));
+//         // initialize_coefficients();
 
-        for (int i = 0; i <= degree2; ++i) {
-            for (int j = 0; j < m2; ++j) {
-                coefficients_plus2[i][j] = binary("P2_" + to_string(i) + "_plus_" + to_string(j));
-            }
-        }
+//         for (int i = 0; i <= degree1; ++i) {
+//             for (int j = 0; j < m1; ++j) {
+//                 coefficients_plus1[i][j] = binary("P1_" + to_string(i) + "_plus_" + to_string(j));
+//             }
+//         }
 
-        for (int i = 0; i <= degree3; ++i) {
-            for (int j = 0; j < m3; ++j) {
-                coefficients_plus3[i][j] = binary("P3_" + to_string(i) + "_plus_" + to_string(j));
-            }
-        }
-        // Define control points
-        vector<RCP<const Basic>> coefficients_A;
-        vector<RCP<const Basic>> coefficients_B;
-        vector<RCP<const Basic>> coefficients_C;
+//         for (int i = 0; i <= degree2; ++i) {
+//             for (int j = 0; j < m2; ++j) {
+//                 coefficients_plus2[i][j] = binary("P2_" + to_string(i) + "_plus_" + to_string(j));
+//             }
+//         }
 
-        for (int i = 0; i <= degree1; ++i) {
-            coefficients_A.push_back(symbol("A" + std::to_string(i)));
-        }
+//         for (int i = 0; i <= degree3; ++i) {
+//             for (int j = 0; j < m3; ++j) {
+//                 coefficients_plus3[i][j] = binary("P3_" + to_string(i) + "_plus_" + to_string(j));
+//             }
+//         }
+//         // Define control points
+//         vector<RCP<const Basic>> coefficients_A;
+//         vector<RCP<const Basic>> coefficients_B;
+//         vector<RCP<const Basic>> coefficients_C;
 
-        for (int i = 0; i <= degree2; ++i) {
-            coefficients_B.push_back(symbol("B" + std::to_string(i)));
-        }
+//         for (int i = 0; i <= degree1; ++i) {
+//             coefficients_A.push_back(symbol("A" + std::to_string(i)));
+//         }
 
-        for (int i = 0; i <= degree3; ++i) {
-            coefficients_C.push_back(symbol("C" + std::to_string(i)));
-        }
+//         for (int i = 0; i <= degree2; ++i) {
+//             coefficients_B.push_back(symbol("B" + std::to_string(i)));
+//         }
 
-        // Generate coefficient expressions
-        vector<RCP<const Basic>> coeff_expressions1(degree1 + 1);
-        vector<RCP<const Basic>> coeff_expressions2(degree2 + 1);
-        vector<RCP<const Basic>> coeff_expressions3(degree3 + 1);
+//         for (int i = 0; i <= degree3; ++i) {
+//             coefficients_C.push_back(symbol("C" + std::to_string(i)));
+//         }
 
-        for (int i = 0; i <= degree1; ++i) {
-            coeff_expressions1[i] = generate_coefficient_expr(coefficients_plus1, degree1, m1, i);
-        }
+//         // Generate coefficient expressions
+//         vector<RCP<const Basic>> coeff_expressions1(degree1 + 1);
+//         vector<RCP<const Basic>> coeff_expressions2(degree2 + 1);
+//         vector<RCP<const Basic>> coeff_expressions3(degree3 + 1);
 
-        for (int i = 0; i <= degree2; ++i) {
-            coeff_expressions2[i] = generate_coefficient_expr(coefficients_plus2, degree2, m2, i);
-        }
+//         for (int i = 0; i <= degree1; ++i) {
+//             coeff_expressions1[i] = generate_coefficient_expr(coefficients_plus1, degree1, m1, i);
+//         }
 
-        for (int i = 0; i <= degree3; ++i) {
-            coeff_expressions3[i] = generate_coefficient_expr(coefficients_plus3, degree3, m3, i);
-        }
+//         for (int i = 0; i <= degree2; ++i) {
+//             coeff_expressions2[i] = generate_coefficient_expr(coefficients_plus2, degree2, m2, i);
+//         }
 
-        // Create an empty aux_dict
-        unordered_map<RCP<const Basic>, RCP<const Basic>> existing_aux_dict_precomputed_powers;
+//         for (int i = 0; i <= degree3; ++i) {
+//             coeff_expressions3[i] = generate_coefficient_expr(coefficients_plus3, degree3, m3, i);
+//         }
 
-        // Precompute powers
-        unordered_map<string, unordered_map<int, RCP<const Basic>>> precomputed_powers;
-        for (int i = 0; i <= degree1; ++i) {
-            precomputed_powers["A" + to_string(i)] = precompute_powers(coeff_expressions1[i], 8, existing_aux_dict_precomputed_powers, true);
-        }
-        for (int i = 0; i <= degree2; ++i) {
-            precomputed_powers["B" + to_string(i)] = precompute_powers(coeff_expressions2[i], 8, existing_aux_dict_precomputed_powers, true);
-        }
-        for (int i = 0; i <= degree3; ++i) {
-            precomputed_powers["C" + to_string(i)] = precompute_powers(coeff_expressions3[i], 8, existing_aux_dict_precomputed_powers, true);
-        }
+//         // Create an empty aux_dict
+//         unordered_map<RCP<const Basic>, RCP<const Basic>> existing_aux_dict_precomputed_powers;
 
-        // Define symbolic variables
-        RCP<const Basic> x = symbol("x");
-        RCP<const Basic> y = symbol("y");
-        RCP<const Basic> t = symbol("t");
-        RCP<const Basic> z = symbol("z");
+//         // Precompute powers
+//         unordered_map<string, unordered_map<int, RCP<const Basic>>> precomputed_powers;
+//         for (int i = 0; i <= degree1; ++i) {
+//             precomputed_powers["A" + to_string(i)] = precompute_powers(coeff_expressions1[i], 8, existing_aux_dict_precomputed_powers, true);
+//         }
+//         for (int i = 0; i <= degree2; ++i) {
+//             precomputed_powers["B" + to_string(i)] = precompute_powers(coeff_expressions2[i], 8, existing_aux_dict_precomputed_powers, true);
+//         }
+//         for (int i = 0; i <= degree3; ++i) {
+//             precomputed_powers["C" + to_string(i)] = precompute_powers(coeff_expressions3[i], 8, existing_aux_dict_precomputed_powers, true);
+//         }
 
-        // Compute the symbolic basis functions
-        auto continuous_bezier_expr1 = bernstein_basis_functions_symbolic_continuous_control(x, degree1, coefficients_A);
-        auto continuous_bezier_expr2 = bernstein_basis_functions_symbolic_continuous_control(y, degree2, coefficients_B);
-        auto continuous_bezier_expr3 = bernstein_basis_functions_symbolic_continuous_control(t, degree3, coefficients_C);
+//         // Define symbolic variables
+//         RCP<const Basic> x = symbol("x");
+//         RCP<const Basic> y = symbol("y");
+//         RCP<const Basic> t = symbol("t");
+//         RCP<const Basic> z = symbol("z");
 
-        RCP<const Basic> bezier_expr1, bezier_expr2, bezier_expr3;
+//         // Compute the symbolic basis functions
+//         auto continuous_bezier_expr1 = bernstein_basis_functions_symbolic_continuous_control(x, degree1, coefficients_A);
+//         auto continuous_bezier_expr2 = bernstein_basis_functions_symbolic_continuous_control(y, degree2, coefficients_B);
+//         auto continuous_bezier_expr3 = bernstein_basis_functions_symbolic_continuous_control(t, degree3, coefficients_C);
 
-        // Combine the two Bézier functions
-        auto combined_continuous_bottom_expr = expand(add(continuous_bezier_expr1, continuous_bezier_expr2));
+//         RCP<const Basic> bezier_expr1, bezier_expr2, bezier_expr3;
 
-        // Create the power of the third Bézier function
-        auto bezier_continuous_expr3_2 = expand(pow(continuous_bezier_expr3, integer(2)));
+//         // Combine the two Bézier functions
+//         auto combined_continuous_bottom_expr = expand(add(continuous_bezier_expr1, continuous_bezier_expr2));
 
-        // Substitute combined_continuous_bottom_expr for t in bezier_continuous_expr3_2
-        map_basic_basic substitutions;
-        substitutions[t] = combined_continuous_bottom_expr;
-        auto substituted_expr = expand(bezier_continuous_expr3_2->subs(substitutions));
+//         // Create the power of the third Bézier function
+//         auto bezier_continuous_expr3_2 = expand(pow(continuous_bezier_expr3, integer(2)));
 
-        // Substitute precomputed powers in substituted_expr
-        auto final_expr = substitute_precomputed_powers(substituted_expr, precomputed_powers);
+//         // Substitute combined_continuous_bottom_expr for t in bezier_continuous_expr3_2
+//         map_basic_basic substitutions;
+//         substitutions[t] = combined_continuous_bottom_expr;
+//         auto substituted_expr = expand(bezier_continuous_expr3_2->subs(substitutions));
 
-        map_basic_basic substitutions_A;
+//         // Substitute precomputed powers in substituted_expr
+//         auto final_expr = substitute_precomputed_powers(substituted_expr, precomputed_powers);
 
-        // Substitute coefficients in substituted_expr
-        for (int i = 0; i <= degree1; ++i) {
-            substitutions_A[symbol("A" + to_string(i))] = coeff_expressions1[i];
-        }
+//         map_basic_basic substitutions_A;
 
-        substituted_expr = final_expr->subs(substitutions_A);
+//         // Substitute coefficients in substituted_expr
+//         for (int i = 0; i <= degree1; ++i) {
+//             substitutions_A[symbol("A" + to_string(i))] = coeff_expressions1[i];
+//         }
 
-        map_basic_basic substitutions_C;
+//         substituted_expr = final_expr->subs(substitutions_A);
 
-        for (int i = 0; i <= degree3; ++i) {
-            substitutions_C[symbol("C" + to_string(i))] = coeff_expressions3[i];
-        }
-        substituted_expr = substituted_expr->subs(substitutions_C);
+//         map_basic_basic substitutions_C;
 
-        map_basic_basic substitutions_B;
+//         for (int i = 0; i <= degree3; ++i) {
+//             substitutions_C[symbol("C" + to_string(i))] = coeff_expressions3[i];
+//         }
+//         substituted_expr = substituted_expr->subs(substitutions_C);
 
-        for (int i = 0; i <= degree2; ++i) {
-            substitutions_B[symbol("B" + to_string(i))] = coeff_expressions2[i];
-        }
+//         map_basic_basic substitutions_B;
 
-        auto final_substituted_expr = expand(substituted_expr->subs(substitutions_B));
+//         for (int i = 0; i <= degree2; ++i) {
+//             substitutions_B[symbol("B" + to_string(i))] = coeff_expressions2[i];
+//         }
 
-        // Create auxiliary variables
-        auto result = apply_aux_variables(final_substituted_expr, existing_aux_dict_precomputed_powers, false);
-        final_substituted_expr = result.first;
-        existing_aux_dict_precomputed_powers = result.second;
+//         auto final_substituted_expr = expand(substituted_expr->subs(substitutions_B));
 
-        // Now define the z^2
-        auto z_squared= pow(z, integer(2));
+//         // Create auxiliary variables
+//         auto result = apply_aux_variables(final_substituted_expr, existing_aux_dict_precomputed_powers, false);
+//         final_substituted_expr = result.first;
+//         existing_aux_dict_precomputed_powers = result.second;
 
-        // Now define the middle expression
-        auto middle_expression = mul(mul(z, integer(-2)), continuous_bezier_expr3);
+//         // Now define the z^2
+//         auto z_squared= pow(z, integer(2));
 
-        map_basic_basic substitutions_middle;
-        substitutions_middle[t] = combined_continuous_bottom_expr;
-        auto substituted_expr_middle = expand(middle_expression->subs(substitutions_middle));
+//         // Now define the middle expression
+//         auto middle_expression = mul(mul(z, integer(-2)), continuous_bezier_expr3);
 
-        // Substitute precomputed powers in substituted_expr
-        auto final_expr_middle = substitute_precomputed_powers(substituted_expr_middle, precomputed_powers);
+//         map_basic_basic substitutions_middle;
+//         substitutions_middle[t] = combined_continuous_bottom_expr;
+//         auto substituted_expr_middle = expand(middle_expression->subs(substitutions_middle));
 
-        final_expr_middle = final_expr_middle->subs(substitutions_A);
+//         // Substitute precomputed powers in substituted_expr
+//         auto final_expr_middle = substitute_precomputed_powers(substituted_expr_middle, precomputed_powers);
 
-        final_expr_middle = final_expr_middle->subs(substitutions_C);
+//         final_expr_middle = final_expr_middle->subs(substitutions_A);
 
-        final_expr_middle = expand(final_expr_middle->subs(substitutions_B));
+//         final_expr_middle = final_expr_middle->subs(substitutions_C);
 
-        // Create auxiliary variables
-        result = apply_aux_variables(final_expr_middle, existing_aux_dict_precomputed_powers, false);
-        final_expr_middle = result.first;
-        aux_dict_final = result.second;
+//         final_expr_middle = expand(final_expr_middle->subs(substitutions_B));
 
-        // Putting it all together:
-        aux_all_sub_expressions_equation = add(add(z_squared, final_expr_middle), final_substituted_expr);
+//         // Create auxiliary variables
+//         result = apply_aux_variables(final_expr_middle, existing_aux_dict_precomputed_powers, false);
+//         final_expr_middle = result.first;
+//         aux_dict_final = result.second;
 
-        // Filter the auxiliary dictionary
-        filter_aux_dict(aux_all_sub_expressions_equation, aux_dict_final);
-    }
+//         // Putting it all together:
+//         aux_all_sub_expressions_equation = add(add(z_squared, final_expr_middle), final_substituted_expr);
 
-
-    auto unique_terms = extract_unique_xyz_terms(aux_all_sub_expressions_equation);
+//         // Filter the auxiliary dictionary
+//         filter_aux_dict(aux_all_sub_expressions_equation, aux_dict_final);
+//     }
 
 
-    // Decompose the main expression into sub-expressions
-    auto unique_sub_expressions = separate_sub_expressions(aux_all_sub_expressions_equation);
+//     auto unique_terms = extract_unique_xyz_terms(aux_all_sub_expressions_equation);
 
-    // Map xyz expressions to P_var expressions
-    auto xyz_to_pvars = map_xyz_to_pvars(unique_sub_expressions);
 
-    // Precompute unique xyz expressions
-    unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> evaluated_xyz_expressions;
+//     // Decompose the main expression into sub-expressions
+//     auto unique_sub_expressions = separate_sub_expressions(aux_all_sub_expressions_equation);
 
-    // Convert input vectors to Eigen arrays with memory alignment
-    Eigen::ArrayXd x_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data.data(), x_data.size());
-    Eigen::ArrayXd y_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data.data(), y_data.size());
-    Eigen::ArrayXd z_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data.data(), z_data.size());
+//     // Map xyz expressions to P_var expressions
+//     auto xyz_to_pvars = map_xyz_to_pvars(unique_sub_expressions);
 
-    // Precompute unique xyz expressions
-    int max_degree = max(d1, d2); // Use std::max to get the maximum value
-    int max_exp = max_degree * d3 * 2;
+//     // Precompute unique xyz expressions
+//     unordered_map<RCP<const Basic>, Eigen::ArrayXd, BasicHash, BasicEqual> evaluated_xyz_expressions;
 
-    evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_eigen, y_eigen, z_eigen, evaluated_xyz_expressions, max_exp);
+//     // Convert input vectors to Eigen arrays with memory alignment
+//     Eigen::ArrayXd x_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data.data(), x_data.size());
+//     Eigen::ArrayXd y_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data.data(), y_data.size());
+//     Eigen::ArrayXd z_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data.data(), z_data.size());
+
+//     // Precompute unique xyz expressions
+//     int max_degree = max(d1, d2); // Use std::max to get the maximum value
+//     int max_exp = max_degree * d3 * 2;
+
+//     evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_eigen, y_eigen, z_eigen, evaluated_xyz_expressions, max_exp);
     
-    // Evaluate and combine the expressions
-    symbolic_sum_no_mean = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions);
+//     // Evaluate and combine the expressions
+//     symbolic_sum_no_mean = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions);
 
-    // calculate the number of samples so SSE is MSE
-    double mean_transformer = 1.0 / x_data_size;
+//     // calculate the number of samples so SSE is MSE
+//     double mean_transformer = 1.0 / x_data_size;
 
-    if (!load_filename.empty()) {
-        symbolic_sum_no_mean = add(symbolic_sum_no_mean, preloaded_symbolic_sum);
-    }
+//     if (!load_filename.empty()) {
+//         symbolic_sum_no_mean = add(symbolic_sum_no_mean, preloaded_symbolic_sum);
+//     }
 
-    // Apply the test multiplier to the test symbolic sum
-    RCP<const Basic> symbolic_sum = expand(mul(real_double(mean_transformer), symbolic_sum_no_mean));
+//     // Apply the test multiplier to the test symbolic sum
+//     RCP<const Basic> symbolic_sum = expand(mul(real_double(mean_transformer), symbolic_sum_no_mean));
 
-    // Find the largest coefficient
-    double max_coeff = find_max_coefficient(symbolic_sum);
+//     // Find the largest coefficient
+//     double max_coeff = find_max_coefficient(symbolic_sum);
 
-    // A good initial guess for a penalty coeff is 10x that of the largest coeff in the sse
-    double penalty_coefficient = penalty_multiplier * max_coeff;
+//     // A good initial guess for a penalty coeff is 10x that of the largest coeff in the sse
+//     double penalty_coefficient = penalty_multiplier * max_coeff;
 
-    // Generate penalty functions
-    auto penalty_functions = generate_penalty_functions(aux_dict_final, penalty_coefficient);
+//     // Generate penalty functions
+//     auto penalty_functions = generate_penalty_functions(aux_dict_final, penalty_coefficient);
 
-    RCP<const Basic> sse_with_penalty = symbolic_sum;
-    for (const auto& penalty_function : penalty_functions) {
-        sse_with_penalty = add(sse_with_penalty, penalty_function);
-    }
+//     RCP<const Basic> sse_with_penalty = symbolic_sum;
+//     for (const auto& penalty_function : penalty_functions) {
+//         sse_with_penalty = add(sse_with_penalty, penalty_function);
+//     }
 
-    // Convert sse_with_penalty to string
-    std::string sse_with_penalty_str = sse_with_penalty->__str__();
+//     // Convert sse_with_penalty to string
+//     std::string sse_with_penalty_str = sse_with_penalty->__str__();
 
-    // Convert aux_dict_final to a map of strings for easier handling in Python
-    std::unordered_map<std::string, std::string> aux_dict_str;
-    for (const auto& pair : aux_dict_final) {
-        aux_dict_str[pair.first->__str__()] = pair.second->__str__();
-    }
+//     // Convert aux_dict_final to a map of strings for easier handling in Python
+//     std::unordered_map<std::string, std::string> aux_dict_str;
+//     for (const auto& pair : aux_dict_final) {
+//         aux_dict_str[pair.first->__str__()] = pair.second->__str__();
+//     }
 
-    // Convert coefficients to strings
-    auto convert_coefficients_to_strings = [](const std::vector<std::vector<RCP<const Basic>>>& coefficients) {
-        std::vector<std::vector<std::string>> coeffs_str;
-        for (const auto& row : coefficients) {
-            std::vector<std::string> row_str;
-            for (const auto& coeff : row) {
-                row_str.push_back(coeff->__str__());
-            }
-            coeffs_str.push_back(row_str);
-        }
-        return coeffs_str;
-    };
+//     // Convert coefficients to strings
+//     auto convert_coefficients_to_strings = [](const std::vector<std::vector<RCP<const Basic>>>& coefficients) {
+//         std::vector<std::vector<std::string>> coeffs_str;
+//         for (const auto& row : coefficients) {
+//             std::vector<std::string> row_str;
+//             for (const auto& coeff : row) {
+//                 row_str.push_back(coeff->__str__());
+//             }
+//             coeffs_str.push_back(row_str);
+//         }
+//         return coeffs_str;
+//     };
 
-    std::vector<std::vector<std::string>> coeffs_plus1_str = convert_coefficients_to_strings(coefficients_plus1);
-    std::vector<std::vector<std::string>> coeffs_plus2_str = convert_coefficients_to_strings(coefficients_plus2);
-    std::vector<std::vector<std::string>> coeffs_plus3_str = convert_coefficients_to_strings(coefficients_plus3);
+//     std::vector<std::vector<std::string>> coeffs_plus1_str = convert_coefficients_to_strings(coefficients_plus1);
+//     std::vector<std::vector<std::string>> coeffs_plus2_str = convert_coefficients_to_strings(coefficients_plus2);
+//     std::vector<std::vector<std::string>> coeffs_plus3_str = convert_coefficients_to_strings(coefficients_plus3);
 
-    // Save the current state if a save_filename is provided
-    if (!save_filename.empty()) {
-        save_data_2_layer(symbolic_sum_no_mean, x_data_size, aux_all_sub_expressions_equation, aux_dict_final, coefficients_plus1, coefficients_plus2, coefficients_plus3, save_filename);
-    }
+//     // Save the current state if a save_filename is provided
+//     if (!save_filename.empty()) {
+//         save_data_2_layer(symbolic_sum_no_mean, x_data_size, aux_all_sub_expressions_equation, aux_dict_final, coefficients_plus1, coefficients_plus2, coefficients_plus3, save_filename);
+//     }
 
-    return std::make_tuple(sse_with_penalty_str, aux_dict_str, coeffs_plus1_str, coeffs_plus2_str, coeffs_plus3_str);
-}
+//     return std::make_tuple(sse_with_penalty_str, aux_dict_str, coeffs_plus1_str, coeffs_plus2_str, coeffs_plus3_str);
+// }
 
 PYBIND11_MODULE(quantum_kan, m) {
     m.def("compute_mse_with_penalty_categorical", &compute_mse_with_penalty_categorical, "Compute MSE with penalty for categorical",
@@ -1996,13 +1780,13 @@ PYBIND11_MODULE(quantum_kan, m) {
           py::arg("load_filename") = "",
           py::arg("save_filename") = "");
 
-    m.def("compute_mse_with_penalty", &compute_mse_with_penalty, "Compute MSE with penalty",
-          py::arg("d1"), py::arg("d2"), py::arg("d3"),
-          py::arg("m1"), py::arg("m2"), py::arg("m3"),
-          py::arg("penalty_multiplier"),
-          py::arg("bias_coefficient"),
-          py::arg("is_fractional"),
-          py::arg("x_data"), py::arg("y_data"), py::arg("z_data"),
-          py::arg("load_filename") = "",
-          py::arg("save_filename") = "");
+    // m.def("compute_mse_with_penalty", &compute_mse_with_penalty, "Compute MSE with penalty",
+    //       py::arg("d1"), py::arg("d2"), py::arg("d3"),
+    //       py::arg("m1"), py::arg("m2"), py::arg("m3"),
+    //       py::arg("penalty_multiplier"),
+    //       py::arg("bias_coefficient"),
+    //       py::arg("is_fractional"),
+    //       py::arg("x_data"), py::arg("y_data"), py::arg("z_data"),
+    //       py::arg("load_filename") = "",
+    //       py::arg("save_filename") = "");
 }
