@@ -133,12 +133,8 @@ bool is_p_or_aux_variable(const RCP<const Basic>& sym) {
 
 // Function to separate sub-expressions
 vector<RCP<const Basic>> separate_sub_expressions(const RCP<const Basic>& expr) {
-    // Expand the expression fully, including powers
-    // auto expanded_expr = expand(expr);
     auto expanded_expr = expr;
     
-    // cout << "Expanded expression: " << *expanded_expr << endl;
-
     // Extract the terms
     vec_basic terms;
     if (is_a<Add>(*expanded_expr)) {
@@ -429,8 +425,8 @@ pair<RCP<const Basic>, unordered_map<RCP<const Basic>, RCP<const Basic>>> apply_
     return {new_expr, existing_aux_dict};
 }
 
-double find_max_coefficient(const RCP<const Basic>& expr) {
-    double max_coeff = 0.0;
+float find_max_coefficient(const RCP<const Basic>& expr) {
+    float max_coeff = 0.0;
 
     // Expand the expression fully, including powers
     auto expanded_expr = expand(expr);
@@ -445,15 +441,13 @@ double find_max_coefficient(const RCP<const Basic>& expr) {
 
     // Iterate over each term
     for (const auto& term : terms) {
-        double coeff_value = 1.0; // default coefficient is 1
+        float coeff_value = 1.0; // default coefficient is 1
 
         if (is_a<Mul>(*term)) {
             auto coeff = static_cast<const Mul&>(*term).get_coef();
             coeff_value = eval_double(*coeff);
-            // cout << "coeff_value: " << coeff_value << endl;
         } else if (is_a<RealDouble>(*term) || is_a<Integer>(*term) || is_a<Rational>(*term)) {
             coeff_value = eval_double(*term);
-            // cout << "coeff_value: " << coeff_value << endl;
         }
 
         // Update the max coefficient if this term's coefficient is larger in absolute value
@@ -465,7 +459,7 @@ double find_max_coefficient(const RCP<const Basic>& expr) {
     return std::abs(max_coeff);
 }
 
-vector<RCP<const Basic>> generate_penalty_functions(const unordered_map<RCP<const Basic>, RCP<const Basic>>& aux_dict_all, double penalty_coefficient) {
+vector<RCP<const Basic>> generate_penalty_functions(const unordered_map<RCP<const Basic>, RCP<const Basic>>& aux_dict_all, float penalty_coefficient) {
     vector<RCP<const Basic>> penalties;
     
     for (const auto& aux_pair : aux_dict_all) {
@@ -567,18 +561,14 @@ void precompute_powers(const ArrayXd &x, int max_exp, std::vector<ArrayXd> &x_po
 }
 
 void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, int max_exp,
-                                        std::unordered_map<std::string, double> &precomputed_values) {
+                                        std::unordered_map<std::string, float> &precomputed_values) {
     // Ensure x, y, z have valid sizes
     if (x.size() == 0 || y.size() == 0 || z.size() == 0) {
         throw std::invalid_argument("Input arrays must have non-zero size.");
     }
-    // cout << "precompute_powers_and_combinations" << endl;
     // Temporary map to hold ArrayXd values
     std::unordered_map<std::string, ArrayXd> temp_precomputed_values;
-    // cout << "x: " << x << endl;
-    // cout << "y: " << y << endl;
 
-    // std::cout << "starting precompute_powers_and_combinations" << endl;
     // Precompute powers of individual variables
     for (int i = 1; i <= max_exp; ++i) {
         if (i > 1) {
@@ -592,12 +582,6 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
         }
     }
 
-    // Print all precomputed values
-    // std::cout << "Precomputed values:" << std::endl;
-    // for (const auto &pair : precomputed_values) {
-    //     std::cout << pair.first << std::endl; //" = " << pair.second.transpose() << std::endl; // Print the key and corresponding ArrayXd
-    // }
-    // std::cout << "intial precompute_powers_and_combinations" << endl;
     std::string temp;
 
     // Precompute combinations like x^i * y^j * z^k where i + j + k <= max_exp
@@ -606,7 +590,6 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
             for (int k = 0; k <= max_exp - i - j; ++k) {
                 // Skip the term that is just 1 (x^0 * y^0 * z^0)
                 if (i == 0 && j == 0 && k == 0) continue;
-                // std::cout << i << j<< k << endl;
                 std::string key;
                 ArrayXd product = ArrayXd::Ones(x.size()); // Start with 1
                 if (i > 0) {
@@ -675,8 +658,6 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
     // Now compute the sums and store in precomputed_values
     for (const auto& pair : temp_precomputed_values) {
         precomputed_values[pair.first] = pair.second.sum();
-        // cout << "pair: " << pair.first << " temp_precomputed_values: " << pair.second.sum() << endl;
-        // cout << "pair: " << pair.first << " temp_precomputed_values: " << pair.second << endl;
     }
     precomputed_values["array_size"] = x.size();
 }
@@ -705,10 +686,10 @@ std::vector<std::string> separate_terms(const std::string &expr_str) {
     return terms;
 }
 
-inline const double evaluate_symengine_expr_optimized(
+inline const float evaluate_symengine_expr_optimized(
     const std::string &expr,
-    const std::unordered_map<std::string, double> &precomputed_values,
-    double &temp1) {
+    const std::unordered_map<std::string, float> &precomputed_values,
+    float &temp1) {
 
     temp1 = 0.0;
 
@@ -716,10 +697,7 @@ inline const double evaluate_symengine_expr_optimized(
     std::vector<std::string> terms = separate_terms(expr);
 
     for (std::string &term : terms) {
-        // if (expr == "AUX9") {
-        //     cout << term << endl;
-        // }
-        double coefficient = 1.0;
+        float coefficient = 1.0;
         std::string base_key;
         bool add_term = true;
 
@@ -735,113 +713,77 @@ inline const double evaluate_symengine_expr_optimized(
         term.erase(term.find_last_not_of(" \n\r\t") + 1);
 
         auto it = precomputed_values.find(term);
+        int start_index = 1;
         if (it != precomputed_values.end()) {
-            const double& value = it->second;
+            const float& value = it->second;
             if (add_term) {
                 temp1 += value;
-                // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
-                //     cout << value << endl;
-                // }
             } else {
                 temp1 -= value;
-                // if (expr == "16 - 96*x + 8*z - 24*x*z + 24*x**2*z - 8*x**3*z + 240*x**2 - 320*x**3 + 240*x**4 - 96*x**5 + 16*x**6") {
-                //     cout << '-' << value << endl;
-                // }
             }
         } else {
             size_t pos = term.find('*');
             std::string coef_str = (pos != std::string::npos) ? term.substr(0, pos) : "";
             base_key = (pos != std::string::npos) ? term.substr(pos + 1) : term;
-            // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-            //     cout << "coef_str: " << coef_str << "base_key is: " << base_key << endl;
-            // }
             if (!coef_str.empty()) {
                 try {
                     if (coef_str[0] == '(') {
+                        if (coef_str[1] == '-'){
+                            add_term = false;
+                            start_index = 2;
+                        }
                         size_t frac_pos = coef_str.find('/');
-                        double numerator = std::stod(coef_str.substr(1, frac_pos));
-                        double denominator = std::stod(coef_str.substr(frac_pos + 1, coef_str.size() - 2));
+                        float numerator = std::stod(coef_str.substr(start_index, frac_pos));
+                        float denominator = std::stod(coef_str.substr(frac_pos + 1, coef_str.size() - 2));
                         coefficient = numerator / denominator;
                     } else {
                         coefficient = std::stod(coef_str);
-                        // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                        //     cout << "coef_str: " << coef_str << "coef is: " << coefficient << endl;
-                        // }
                     }
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "found coef_str: " << coefficient << endl;
-                    // }
                 } catch (const std::exception &) {
                     coefficient = 1.0;
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "did NOT found coef_str: " << coefficient << endl;
-                    // }
                 }
             } else {
                 try {
                     if (base_key[0] == '(') {
+                        if (base_key[1] == '-'){
+                            add_term = false;
+                            start_index = 2;
+                        } 
                         size_t frac_pos = base_key.find('/');
-                        double numerator = std::stod(base_key.substr(1, frac_pos));
-                        double denominator = std::stod(base_key.substr(frac_pos + 1, base_key.size() - 2));
+                        float numerator = std::stod(base_key.substr(start_index, frac_pos));
+                        float denominator = std::stod(base_key.substr(frac_pos + 1, base_key.size() - 2));
                         coefficient = numerator / denominator;
                     } else {
                         size_t frac_pos = base_key.find('/');
                         if (frac_pos != std::string::npos) {
-                            // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                            //     cout << "found frac" << endl;
-                            // }
-                            double numerator = std::stod(base_key.substr(0, frac_pos));
-                            double denominator = std::stod(base_key.substr(frac_pos + 1, base_key.size() - 1));
+                            float numerator = std::stod(base_key.substr(0, frac_pos));
+                            float denominator = std::stod(base_key.substr(frac_pos + 1, base_key.size() - 1));
                             coefficient = numerator / denominator;  
                         } else {
                             coefficient = std::stod(base_key);
                         }
-                        // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                        //     cout << "base_key: " << base_key << "coef is: " << coefficient << endl;
-                        // }
                     }
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "found base_key: " << coefficient << endl;
-                    // }
                 } catch (const std::exception &) {
                     coefficient = 1.0;
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "did NOT found base_key: " << coefficient << endl;
-                    // }
                 }
             }
 
             auto base_it = precomputed_values.find(base_key);
             if (base_it != precomputed_values.end()) {
-                const double& base_value = base_it->second;
+                const float& base_value = base_it->second;
                 if (add_term) {
                     temp1 += coefficient * base_value;
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "coefficient: " << coefficient << " value: " << base_value << endl;
-                    // }
                 } else {
                     temp1 -= coefficient * base_value;
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "coefficient: -" << coefficient << " value: " << base_value << endl;
-                    // }
                 }
             } else if (term.substr(0,3) != "AUX") {
                 if (add_term) {
                     temp1 += coefficient * precomputed_values.find("array_size")->second;
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "coefficient: " << coefficient << endl;
-                    // }
                 } else {
                     temp1 -= coefficient * precomputed_values.find("array_size")->second;
-                    // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-                    //     cout << "coefficient: -" << coefficient << endl;
-                    // }
                 }
             }
         }
-        // if (expr == "-1/8 + (1/4)*y + (-1/8)*y**2") {
-        //     cout << "temp1: " << temp1 << endl;
-        // }
     }
 
     return temp1;
@@ -853,37 +795,18 @@ void evaluate_unique_xyz_expressions_optimized(
     const Eigen::ArrayXd &x_eigen,
     const Eigen::ArrayXd &y_eigen,
     const Eigen::ArrayXd &z_eigen,
-    std::unordered_map<std::string, double> &evaluated_xyz_expressions, int max_exp
+    std::unordered_map<std::string, float> &evaluated_xyz_expressions, int max_exp
 ) {
-    std::unordered_map<std::string, double> precomputed_values;
-    // auto start_precompute_powers = std::chrono::high_resolution_clock::now(); 
+    std::unordered_map<std::string, float> precomputed_values;
 
     precompute_powers_and_combinations(x_eigen, y_eigen, z_eigen, max_exp, precomputed_values);
-    // auto end_precompute_powers = std::chrono::high_resolution_clock::now(); 
 
-    // std::chrono::duration<double> elapsed_precompute_powers = end_precompute_powers - start_precompute_powers;
-    // std::cout << "Time taken for precompute_powers: " << elapsed_precompute_powers.count() << " seconds" << std::endl;
-
-    // Print the contents of xyz_to_pvars
-    // for (const auto &pair : xyz_to_pvars) {
-    //     std::string key = pair.first;
-    //     const vector<RCP<const Basic>> &value = pair.second;
-
-    //     std::cout << "Key: " << key << std::endl;
-    //     std::cout << "Values: ";
-    //     for (const auto &val : value) {
-    //         std::cout << val->__str__() << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
     evaluated_xyz_expressions.reserve(xyz_to_pvars.size()); // Reserve space if possible
 
 
-    double temp1;
+    float temp1;
     for (const auto &pair : xyz_to_pvars) {
-        // std::string xyz_expr = pair.first;
         evaluated_xyz_expressions[pair.first] = evaluate_symengine_expr_optimized(pair.first, precomputed_values, temp1);
-        // evaluated_xyz_expressions[xyz_expr] = std::move(temp1);
     }
 }
 
@@ -920,35 +843,23 @@ std::unordered_map<std::string, vector<RCP<const Basic>>> map_xyz_to_pvars(const
 // Function to evaluate and combine expressions for a dataset
 RCP<const Basic> evaluate_and_combine(
     const unordered_map<std::string, vector<RCP<const Basic>>> &xyz_to_pvars,
-    const unordered_map<std::string, double> &evaluated_xyz_expressions
+    const unordered_map<std::string, float> &evaluated_xyz_expressions
 ) {
-    // auto start_evaluate_and_combine = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
     RCP<const Basic> final_result = zero;
 
     for (const auto &pair : xyz_to_pvars) {
         const auto &p_vars = pair.second;
-        const double &evaluated_value = evaluated_xyz_expressions.at(pair.first);
+        const float &evaluated_value = evaluated_xyz_expressions.at(pair.first);
         RCP<const RealDouble> multiplier = real_double(evaluated_value);
 
         // Temporary accumulation to minimize add calls. This doesnt seem like it would significantly speedup the code but it does.
         RCP<const Basic> temp_result = zero;
 
-        // double sum = evaluated_values.sum();
         for (const auto &p_var_expr : p_vars) {
-            // final_result = add(final_result, mul(multiplier, p_var_expr));
-            // RCP<const Basic> product = mul(multiplier, p_var_expr);
             temp_result = add(temp_result, mul(multiplier, p_var_expr));
         }
         final_result = add(final_result, temp_result);
     }
-
-    // auto end_evaluate_and_combine = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
-    // std::chrono::duration<double> elapsed_evaluate_and_combine = end_evaluate_and_combine - start_evaluate_and_combine;
-
-    // cout << "Time taken for evaluate_and_combine: " << elapsed_evaluate_and_combine.count() << " seconds" << endl;
-
     return final_result;
 }
 
@@ -1176,12 +1087,9 @@ RCP<const Basic> substitute_precomputed_powers(const RCP<const Basic>& expr, con
 }
 
 std::tuple<std::string, std::unordered_map<std::string, std::string>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>>
-compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double penalty_multiplier, double bias_coefficient, const std::vector<double>& x_data_train, const std::vector<double>& y_data_train, const std::vector<double>& z_data_train, const std::vector<double>& x_data_test, const std::vector<double>& y_data_test, const std::vector<double>& z_data_test, double test_multiplier,  const std::string& load_filename = "", const std::string& save_filename = "") {
+compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, float penalty_multiplier, float bias_coefficient, const std::vector<double>& x_data_train, const std::vector<double>& y_data_train, const std::vector<double>& z_data_train, const std::vector<double>& x_data_test, const std::vector<double>& y_data_test, const std::vector<double>& z_data_test, float test_multiplier,  const std::string& load_filename = "", const std::string& save_filename = "") {
     int degree1 = d1;
     int degree2 = d2;
-
-    // auto start_total = std::chrono::high_resolution_clock::now(); // End total timing
-    // auto start_func_build = std::chrono::high_resolution_clock::now(); // End timing extraction
 
     // If a load_filename is provided, load the state from the file
     RCP<const Basic> aux_all_sub_expressions_equation;
@@ -1296,73 +1204,42 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
         // Putting it all together:
         aux_all_sub_expressions_equation = add(add(z_squared, middle_expression), expr_layer1_2);
 
-        // cout >> "aux_all_sub_expressions_equation: " << *aux_all_sub_expressions_equation << endl;
     }
 
-    // auto end_func_build = std::chrono::high_resolution_clock::now(); // End timing extraction
-
-    // auto start_unique_terms = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
     auto unique_terms = extract_unique_xyz_terms(aux_all_sub_expressions_equation);
-
-    // auto end_unique_terms = std::chrono::high_resolution_clock::now(); // End timing extraction
-
-    // auto start_decompose = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     // Decompose the main expression into sub-expressions
     auto sub_expressions = separate_sub_expressions(aux_all_sub_expressions_equation);
 
-    // auto end_decompose = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
-    // auto start_mapping = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
     // Map xyz expressions to P_var expressions
     auto xyz_to_pvars = map_xyz_to_pvars(sub_expressions);
-
-    // auto end_mapping = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
-    // auto start_precompute = std::chrono::high_resolution_clock::now(); // Start timing precompute
-    // auto start_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     // Convert input vectors to Eigen arrays with memory alignment
     Eigen::ArrayXd x_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data_train.data(), x_data_train.size());
     Eigen::ArrayXd y_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data_train.data(), y_data_train.size());
     Eigen::ArrayXd z_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data_train.data(), z_data_train.size());
-    // cout << "x_data_train: " << endl;
-    // // Range-based for loop to print all elements
-    // for (const double& value : x_data_train) {
-    //     std::cout << value << " ";
-    // }
-    // std::cout << std::endl;
-    // cout << "x_train_eigen: " << x_train_eigen << endl;
+
     // Evaluate expressions for training data
-    std::unordered_map<std::string, double> evaluated_xyz_expressions_train;
+    std::unordered_map<std::string, float> evaluated_xyz_expressions_train;
     int max_degree = max(d1, d2); // Use std::max to get the maximum value
     int max_exp = max_degree * 2;
 
-    // auto start_train_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
     evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_train_eigen, y_train_eigen, z_train_eigen, evaluated_xyz_expressions_train, max_exp);
-    // RCP<const Basic> symbolic_sum_train = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_train);
-    // auto end_train_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     Eigen::ArrayXd x_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data_test.data(), x_data_test.size());
     Eigen::ArrayXd y_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data_test.data(), y_data_test.size());
     Eigen::ArrayXd z_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data_test.data(), z_data_test.size());
 
     // Evaluate expressions for test data
-    std::unordered_map<std::string, double>  evaluated_xyz_expressions_test;
+    std::unordered_map<std::string, float>  evaluated_xyz_expressions_test;
 
     evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_test_eigen, y_test_eigen, z_test_eigen, evaluated_xyz_expressions_test, max_exp);
 
-    // auto end_eval = std::chrono::high_resolution_clock::now(); // Start timing precompute
-    // auto start_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
     RCP<const Basic> symbolic_sum_train = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_train);
     RCP<const Basic> symbolic_sum_test = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_test);
-    // auto end_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     // calculate the number of samples so SSE is MSE
-    double mean_transformer = 1.0 / x_data_test.size();
+    float mean_transformer = 1.0 / x_data_test.size();
 
     test_multiplier = test_multiplier * mean_transformer;
     // Apply the test multiplier to the test symbolic sum
@@ -1371,21 +1248,16 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     
     // Combine the training and test symbolic sums
     symbolic_sum = add(symbolic_sum_train, symbolic_sum_test);
-    // symbolic_sum = symbolic_sum_train;
-    // auto end_combineeval = std::chrono::high_resolution_clock::now(); // Start timing precompute
 
     if (!load_filename.empty()) {
-        cout << "combining the old symbolic_sum with the new one" << endl;
         symbolic_sum = add(symbolic_sum, preloaded_symbolic_sum);
     }
 
     // Find the largest coefficient
-    double max_coeff = find_max_coefficient(symbolic_sum);
-
-    // auto start_penalty = std::chrono::high_resolution_clock::now(); // Start timing precompute
+    float max_coeff = find_max_coefficient(symbolic_sum);
 
     // A good initial guess for a penalty coeff is 10x that of the largest coeff in the sse
-    double penalty_coefficient = penalty_multiplier * max_coeff;
+    float penalty_coefficient = penalty_multiplier * max_coeff;
 
     // Generate penalty functions
     auto penalty_functions = generate_penalty_functions(aux_dict_final, penalty_coefficient);
@@ -1394,12 +1266,6 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     for (const auto& penalty_function : penalty_functions) {
         sse_with_penalty = add(sse_with_penalty, penalty_function);
     }
-
-    // auto end_penalty = std::chrono::high_resolution_clock::now(); // Start timing precompute
-
-    // auto end_precompute = std::chrono::high_resolution_clock::now(); // End timing precompute
-
-    // auto start_str_substitution = std::chrono::high_resolution_clock::now(); // Start timing substitution
 
     // Convert sse_with_penalty to string
     std::string sse_with_penalty_str = sse_with_penalty->__str__();
@@ -1432,39 +1298,13 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, double pena
     if (!save_filename.empty()) {
         save_data(symbolic_sum, aux_all_sub_expressions_equation, aux_dict_final, coefficients_plus1, coefficients_minus1, coefficients_plus2, coefficients_minus2, save_filename);
     }
-    // auto end_str_substitution = std::chrono::high_resolution_clock::now(); // End timing substitution
-    // auto end_total = std::chrono::high_resolution_clock::now(); // End total timing
 
-    // Calculate and print elapsed times
-    // std::chrono::duration<double> elapsed_func_build = end_func_build - start_func_build;
-    // std::chrono::duration<double> elapsed_precompute = end_precompute - start_precompute;
-    // std::chrono::duration<double> elapsed_unique_terms = end_unique_terms - start_unique_terms;
-    // std::chrono::duration<double> elapsed_str_substitution = end_str_substitution - start_str_substitution;
-    // std::chrono::duration<double> elapsed_decomposed = end_decompose - start_decompose;
-    // std::chrono::duration<double> elapsed_mapping = end_mapping - start_mapping;
-    // std::chrono::duration<double> elapsed_eval = end_eval - start_eval;
-    // std::chrono::duration<double> elapsed_train_eval = end_train_eval - start_train_eval;
-    // std::chrono::duration<double> elapsed_combineeval = end_combineeval - start_combineeval;
-    // std::chrono::duration<double> elapsed_penalty = end_penalty - start_penalty;
-    // std::chrono::duration<double> elapsed_total = end_total - start_total;
-
-    // cout << "Time taken for function building: " << elapsed_func_build.count() << " seconds" << endl;
-    // cout << "Time taken for elapsed_unique_terms: " << elapsed_unique_terms.count() << " seconds" << endl;
-    // cout << "Time taken for elapsed_decomposed: " << elapsed_decomposed.count() << " seconds" << endl;
-    // cout << "Time taken for elapsed_mapping: " << elapsed_mapping.count() << " seconds" << endl;
-    // cout << "Time taken for elapsed_eval: " << elapsed_eval.count() << " seconds" << endl;
-    // cout << "Time taken for elapsed_train_eval: " << elapsed_train_eval.count() << " seconds" << endl;
-    // cout << "Time taken for elapsed_combineeval: " << elapsed_combineeval.count() << " seconds" << endl;
-    // cout << "Time taken for elapsed_penalty: " << elapsed_penalty.count() << " seconds" << endl;
-    // cout << "Time taken for precomputation of values: " << elapsed_precompute.count() << " seconds" << endl;
-    // cout << "Time taken for string substitution: " << elapsed_str_substitution.count() << " seconds" << endl;
-    // cout << "Total time taken: " << elapsed_total.count() << " seconds" << endl;
     return std::make_tuple(sse_with_penalty_str, aux_dict_str, coeffs_plus1_str, coeffs_minus1_str, coeffs_plus2_str, coeffs_minus2_str);
 }
 
 
 std::tuple<std::string, std::unordered_map<std::string, std::string>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>>
-compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, double penalty_multiplier, double bias_coefficient, bool is_fractional, const std::vector<double>& x_data, const std::vector<double>& y_data, const std::vector<double>& z_data,  const std::string& load_filename = "", const std::string& save_filename = "") {
+compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, float penalty_multiplier, float bias_coefficient, bool is_fractional, const std::vector<double>& x_data, const std::vector<double>& y_data, const std::vector<double>& z_data,  const std::string& load_filename = "", const std::string& save_filename = "") {
     int degree1 = d1;
     int degree2 = d2;
     int degree3 = d3;
@@ -1641,6 +1481,7 @@ compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, double 
 
     // Filter the auxiliary dictionary
     filter_aux_dict(aux_all_sub_expressions_equation, aux_dict_final);
+    // End of original else statement from when I allowed for loading of symengine expression
     // }
 
 
@@ -1654,7 +1495,7 @@ compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, double 
     auto xyz_to_pvars = map_xyz_to_pvars(unique_sub_expressions);
 
     // Precompute unique xyz expressions
-    unordered_map<std::string, double> evaluated_xyz_expressions;
+    unordered_map<std::string, float> evaluated_xyz_expressions;
 
     // Convert input vectors to Eigen arrays with memory alignment
     Eigen::ArrayXd x_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data.data(), x_data.size());
@@ -1671,7 +1512,7 @@ compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, double 
     symbolic_sum_no_mean = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions);
 
     // calculate the number of samples so SSE is MSE
-    double mean_transformer = 1.0 / x_data_size;
+    float mean_transformer = 1.0 / x_data_size;
 
     if (!load_filename.empty()) {
         symbolic_sum_no_mean = add(symbolic_sum_no_mean, preloaded_symbolic_sum);
@@ -1681,10 +1522,10 @@ compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, double 
     RCP<const Basic> symbolic_sum = expand(mul(real_double(mean_transformer), symbolic_sum_no_mean));
 
     // Find the largest coefficient
-    double max_coeff = find_max_coefficient(symbolic_sum);
+    float max_coeff = find_max_coefficient(symbolic_sum);
 
     // A good initial guess for a penalty coeff is 10x that of the largest coeff in the sse
-    double penalty_coefficient = penalty_multiplier * max_coeff;
+    float penalty_coefficient = penalty_multiplier * max_coeff;
 
     // Generate penalty functions
     auto penalty_functions = generate_penalty_functions(aux_dict_final, penalty_coefficient);
