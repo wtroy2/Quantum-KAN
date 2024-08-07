@@ -34,7 +34,9 @@
 namespace py = pybind11;
 using namespace SymEngine;
 using namespace std;
+using Eigen::ArrayXf;
 using Eigen::ArrayXd;
+using Eigen::ArrayXi;
 using json = nlohmann::json;
 
 
@@ -552,15 +554,208 @@ std::unordered_set<RCP<const Basic>, BasicHash, BasicEqual> extract_unique_xyz_t
     return unique_terms;
 }
 
-void precompute_powers(const ArrayXd &x, int max_exp, std::vector<ArrayXd> &x_powers) {
-    x_powers.resize(max_exp + 1);
-    x_powers[0] = ArrayXd::Ones(x.size());
-    for (int i = 1; i <= max_exp; ++i) {
-        x_powers[i] = x_powers[i-1] * x;
+// void precompute_powers_and_combinations_categorical(const ArrayXf &x, const ArrayXf &y, const ArrayXi &z, int max_exp,
+//                                         std::unordered_map<std::string, float> &precomputed_values) {
+//     // Ensure x, y, z have valid sizes
+//     if (x.size() == 0 || y.size() == 0 || z.size() == 0) {
+//         throw std::invalid_argument("Input arrays must have non-zero size.");
+//     }
+//     // Temporary map to hold ArrayXf values
+//     std::unordered_map<std::string, ArrayXf> temp_precomputed_values;
+
+//     // Precompute powers of individual variables
+//     for (int i = 1; i <= max_exp; ++i) {
+//         if (i > 1) {
+//             temp_precomputed_values["x**" + std::to_string(i)] = x.pow(i);
+//             temp_precomputed_values["y**" + std::to_string(i)] = y.pow(i);
+//         } else {
+//             temp_precomputed_values["x"] = x.pow(i);
+//             temp_precomputed_values["y"] = y.pow(i);
+//         }
+//     }
+
+//     std::string temp;
+
+//     // Precompute combinations like x^i * y^j * z^k where i + j + k <= max_exp
+//     for (int i = 0; i <= max_exp; ++i) {
+//         for (int j = 0; j <= max_exp - i; ++j) {
+//             for (int k = 0; k <= 1; ++k) {
+//                 // Skip the term that is just 1 (x^0 * y^0 * z^0)
+//                 if (i == 0 && j == 0 && k == 0) continue;
+//                 std::string key;
+//                 ArrayXf product = ArrayXf::Ones(x.size()); // Start with 1
+//                 if (i > 0) {
+//                     temp = std::to_string(i);
+//                     if (temp != "1"){
+//                         key += "x**" + temp;
+//                         product *= temp_precomputed_values["x**" + temp];
+//                     } else {
+//                         key += "x";
+//                         product *= temp_precomputed_values["x"];
+//                     }
+//                     if (j > 0) {
+//                         temp = std::to_string(j);
+//                         if (temp != "1"){
+//                             key += "*y**" + temp;
+//                             product *= temp_precomputed_values["y**" + temp];
+//                         } else {
+//                             key += "*y";
+//                             product *= temp_precomputed_values["y"];
+//                         }
+//                     }
+//                     if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
+//                         temp = std::to_string(k);
+//                         if (temp != "1"){
+//                             key += "*z**" + temp;
+//                             product *= temp_precomputed_values["z**" + temp];
+//                         } else {
+//                             key += "*z";
+//                             product *= z;
+//                         }
+//                     }
+//                 } else if (j > 0) {
+//                     temp = std::to_string(j);
+//                     if (temp != "1"){
+//                         key += "y**" + temp;
+//                         product *= temp_precomputed_values["y**" + temp];
+//                     } else {
+//                         key += "y";
+//                         product *= temp_precomputed_values["y"];
+//                     }
+//                     if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
+//                         temp = std::to_string(k);
+//                         if (temp != "1"){
+//                             key += "*z**" + temp;
+//                             product *= temp_precomputed_values["z**" + temp];
+//                         } else {
+//                             key += "*z";
+//                             product *= z;
+//                         }
+//                     }
+//                 } else if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
+//                     temp = std::to_string(k);
+//                     if (temp != "1"){
+//                         key += "z**" + temp;
+//                         product *= temp_precomputed_values["z**" + temp];
+//                     } else {
+//                         key += "z";
+//                         product *= z;
+//                     }
+//                 }
+
+//                 temp_precomputed_values[key] = product;
+//             }
+//         }
+//     }
+//     // Now compute the sums and store in precomputed_values
+//     for (const auto& pair : temp_precomputed_values) {
+//         precomputed_values[pair.first] = pair.second.sum();
+//     }
+//     precomputed_values["array_size"] = x.size();
+// }
+
+void precompute_powers_and_combinations_float(const ArrayXf &x, const ArrayXf &y, const ArrayXf &z, int max_exp,
+                                        std::unordered_map<std::string, float> &precomputed_values) {
+    // Ensure x, y, z have valid sizes
+    if (x.size() == 0 || y.size() == 0 || z.size() == 0) {
+        throw std::invalid_argument("Input arrays must have non-zero size.");
     }
+    // Temporary map to hold ArrayXf values
+    std::unordered_map<std::string, ArrayXf> temp_precomputed_values;
+
+    // Precompute powers of individual variables
+    for (int i = 1; i <= max_exp; ++i) {
+        if (i > 1) {
+            temp_precomputed_values["x**" + std::to_string(i)] = x.pow(i);
+            temp_precomputed_values["y**" + std::to_string(i)] = y.pow(i);
+        } else {
+            temp_precomputed_values["x"] = x.pow(i);
+            temp_precomputed_values["y"] = y.pow(i);
+            temp_precomputed_values["z"] = z.pow(i);     
+        }
+    }
+
+    std::string temp;
+
+    // Precompute combinations like x^i * y^j * z^k where i + j + k <= max_exp
+    for (int i = 0; i <= max_exp; ++i) {
+        for (int j = 0; j <= max_exp - i; ++j) {
+            for (int k = 0; k <= 1; ++k) {
+                // Skip the term that is just 1 (x^0 * y^0 * z^0)
+                if (i == 0 && j == 0 && k == 0) continue;
+                std::string key;
+                ArrayXf product = ArrayXf::Ones(x.size()); // Start with 1
+                if (i > 0) {
+                    temp = std::to_string(i);
+                    if (temp != "1"){
+                        key += "x**" + temp;
+                        product *= temp_precomputed_values["x**" + temp];
+                    } else {
+                        key += "x";
+                        product *= temp_precomputed_values["x"];
+                    }
+                    if (j > 0) {
+                        temp = std::to_string(j);
+                        if (temp != "1"){
+                            key += "*y**" + temp;
+                            product *= temp_precomputed_values["y**" + temp];
+                        } else {
+                            key += "*y";
+                            product *= temp_precomputed_values["y"];
+                        }
+                    }
+                    if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
+                        temp = std::to_string(k);
+                        if (temp != "1"){
+                            key += "*z**" + temp;
+                            product *= temp_precomputed_values["z**" + temp];
+                        } else {
+                            key += "*z";
+                            product *= temp_precomputed_values["z"];
+                        }
+                    }
+                } else if (j > 0) {
+                    temp = std::to_string(j);
+                    if (temp != "1"){
+                        key += "y**" + temp;
+                        product *= temp_precomputed_values["y**" + temp];
+                    } else {
+                        key += "y";
+                        product *= temp_precomputed_values["y"];
+                    }
+                    if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
+                        temp = std::to_string(k);
+                        if (temp != "1"){
+                            key += "*z**" + temp;
+                            product *= temp_precomputed_values["z**" + temp];
+                        } else {
+                            key += "*z";
+                            product *= temp_precomputed_values["z"];
+                        }
+                    }
+                } else if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
+                    temp = std::to_string(k);
+                    if (temp != "1"){
+                        key += "z**" + temp;
+                        product *= temp_precomputed_values["z**" + temp];
+                    } else {
+                        key += "z";
+                        product *= temp_precomputed_values["z"];
+                    }
+                }
+
+                temp_precomputed_values[key] = product;
+            }
+        }
+    }
+    // Now compute the sums and store in precomputed_values
+    for (const auto& pair : temp_precomputed_values) {
+        precomputed_values[pair.first] = pair.second.sum();
+    }
+    precomputed_values["array_size"] = x.size();
 }
 
-void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, int max_exp,
+void precompute_powers_and_combinations_double(const ArrayXd &x, const ArrayXd &y, const ArrayXd &z, int max_exp,
                                         std::unordered_map<std::string, float> &precomputed_values) {
     // Ensure x, y, z have valid sizes
     if (x.size() == 0 || y.size() == 0 || z.size() == 0) {
@@ -574,7 +769,6 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
         if (i > 1) {
             temp_precomputed_values["x**" + std::to_string(i)] = x.pow(i);
             temp_precomputed_values["y**" + std::to_string(i)] = y.pow(i);
-            temp_precomputed_values["z**" + std::to_string(i)] = z.pow(i);
         } else {
             temp_precomputed_values["x"] = x.pow(i);
             temp_precomputed_values["y"] = y.pow(i);
@@ -587,7 +781,7 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
     // Precompute combinations like x^i * y^j * z^k where i + j + k <= max_exp
     for (int i = 0; i <= max_exp; ++i) {
         for (int j = 0; j <= max_exp - i; ++j) {
-            for (int k = 0; k <= max_exp - i - j; ++k) {
+            for (int k = 0; k <= 1; ++k) {
                 // Skip the term that is just 1 (x^0 * y^0 * z^0)
                 if (i == 0 && j == 0 && k == 0) continue;
                 std::string key;
@@ -611,7 +805,7 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
                             product *= temp_precomputed_values["y"];
                         }
                     }
-                    if (k > 0) {
+                    if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
                         temp = std::to_string(k);
                         if (temp != "1"){
                             key += "*z**" + temp;
@@ -630,7 +824,7 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
                         key += "y";
                         product *= temp_precomputed_values["y"];
                     }
-                    if (k > 0) {
+                    if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
                         temp = std::to_string(k);
                         if (temp != "1"){
                             key += "*z**" + temp;
@@ -640,7 +834,7 @@ void precompute_powers_and_combinations(const ArrayXd &x, const ArrayXd &y, cons
                             product *= temp_precomputed_values["z"];
                         }
                     }
-                } else if (k > 0) {
+                } else if ((k > 0) && (i <= max_exp / 2) && (j <= max_exp / 2)) {
                     temp = std::to_string(k);
                     if (temp != "1"){
                         key += "z**" + temp;
@@ -790,7 +984,51 @@ inline const float evaluate_symengine_expr_optimized(
 }
 
 // Function to evaluate all unique xyz expressions for a dataset
-void evaluate_unique_xyz_expressions_optimized(
+// void evaluate_unique_xyz_expressions_optimized_categorical(
+//     const unordered_map<std::string, vector<RCP<const Basic>>> &xyz_to_pvars,
+//     const Eigen::ArrayXf &x_eigen,
+//     const Eigen::ArrayXf &y_eigen,
+//     const Eigen::ArrayXi &z_eigen,
+//     std::unordered_map<std::string, float> &evaluated_xyz_expressions, int max_exp
+// ) {
+//     std::unordered_map<std::string, float> precomputed_values;
+
+//     precompute_powers_and_combinations_categorical(x_eigen, y_eigen, z_eigen, max_exp, precomputed_values);
+
+//     evaluated_xyz_expressions.reserve(xyz_to_pvars.size()); // Reserve space if possible
+
+
+//     float temp1;
+//     for (const auto &pair : xyz_to_pvars) {
+//         evaluated_xyz_expressions[pair.first] = evaluate_symengine_expr_optimized(pair.first, precomputed_values, temp1);
+//     }
+// }
+
+
+// Function to evaluate all unique xyz expressions for a dataset
+void evaluate_unique_xyz_expressions_optimized_float(
+    const unordered_map<std::string, vector<RCP<const Basic>>> &xyz_to_pvars,
+    const Eigen::ArrayXf &x_eigen,
+    const Eigen::ArrayXf &y_eigen,
+    const Eigen::ArrayXf &z_eigen,
+    std::unordered_map<std::string, float> &evaluated_xyz_expressions, int max_exp
+) {
+    std::unordered_map<std::string, float> precomputed_values;
+
+    precompute_powers_and_combinations_float(x_eigen, y_eigen, z_eigen, max_exp, precomputed_values);
+
+    evaluated_xyz_expressions.reserve(xyz_to_pvars.size()); // Reserve space if possible
+
+
+    float temp1;
+    for (const auto &pair : xyz_to_pvars) {
+        evaluated_xyz_expressions[pair.first] = evaluate_symengine_expr_optimized(pair.first, precomputed_values, temp1);
+    }
+}
+
+
+// Function to evaluate all unique xyz expressions for a dataset
+void evaluate_unique_xyz_expressions_optimized_double(
     const unordered_map<std::string, vector<RCP<const Basic>>> &xyz_to_pvars,
     const Eigen::ArrayXd &x_eigen,
     const Eigen::ArrayXd &y_eigen,
@@ -799,7 +1037,7 @@ void evaluate_unique_xyz_expressions_optimized(
 ) {
     std::unordered_map<std::string, float> precomputed_values;
 
-    precompute_powers_and_combinations(x_eigen, y_eigen, z_eigen, max_exp, precomputed_values);
+    precompute_powers_and_combinations_double(x_eigen, y_eigen, z_eigen, max_exp, precomputed_values);
 
     evaluated_xyz_expressions.reserve(xyz_to_pvars.size()); // Reserve space if possible
 
@@ -1087,7 +1325,7 @@ RCP<const Basic> substitute_precomputed_powers(const RCP<const Basic>& expr, con
 }
 
 std::tuple<std::string, std::unordered_map<std::string, std::string>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>>
-compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, float penalty_multiplier, float bias_coefficient, const std::vector<double>& x_data_train, const std::vector<double>& y_data_train, const std::vector<double>& z_data_train, const std::vector<double>& x_data_test, const std::vector<double>& y_data_test, const std::vector<double>& z_data_test, float test_multiplier,  const std::string& load_filename = "", const std::string& save_filename = "") {
+compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, float penalty_multiplier, float bias_coefficient, const std::vector<float>& x_data_train, const std::vector<float>& y_data_train, const std::vector<float>& z_data_train, const std::vector<float>& x_data_test, const std::vector<float>& y_data_test, const std::vector<float>& z_data_test, float test_multiplier,  const std::string& load_filename = "", const std::string& save_filename = "") {
     int degree1 = d1;
     int degree2 = d2;
 
@@ -1215,25 +1453,25 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, float penal
     auto xyz_to_pvars = map_xyz_to_pvars(sub_expressions);
 
     // Convert input vectors to Eigen arrays with memory alignment
-    Eigen::ArrayXd x_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data_train.data(), x_data_train.size());
-    Eigen::ArrayXd y_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data_train.data(), y_data_train.size());
-    Eigen::ArrayXd z_train_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data_train.data(), z_data_train.size());
+    Eigen::ArrayXf x_train_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(x_data_train.data(), x_data_train.size());
+    Eigen::ArrayXf y_train_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(y_data_train.data(), y_data_train.size());
+    Eigen::ArrayXf z_train_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(z_data_train.data(), z_data_train.size());
 
     // Evaluate expressions for training data
     std::unordered_map<std::string, float> evaluated_xyz_expressions_train;
     int max_degree = max(d1, d2); // Use std::max to get the maximum value
     int max_exp = max_degree * 2;
 
-    evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_train_eigen, y_train_eigen, z_train_eigen, evaluated_xyz_expressions_train, max_exp);
+    evaluate_unique_xyz_expressions_optimized_float(xyz_to_pvars, x_train_eigen, y_train_eigen, z_train_eigen, evaluated_xyz_expressions_train, max_exp);
 
-    Eigen::ArrayXd x_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(x_data_test.data(), x_data_test.size());
-    Eigen::ArrayXd y_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(y_data_test.data(), y_data_test.size());
-    Eigen::ArrayXd z_test_eigen = Eigen::Map<const Eigen::ArrayXd, Eigen::Aligned>(z_data_test.data(), z_data_test.size());
+    Eigen::ArrayXf x_test_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(x_data_test.data(), x_data_test.size());
+    Eigen::ArrayXf y_test_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(y_data_test.data(), y_data_test.size());
+    Eigen::ArrayXf z_test_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(z_data_test.data(), z_data_test.size());
 
     // Evaluate expressions for test data
     std::unordered_map<std::string, float>  evaluated_xyz_expressions_test;
 
-    evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_test_eigen, y_test_eigen, z_test_eigen, evaluated_xyz_expressions_test, max_exp);
+    evaluate_unique_xyz_expressions_optimized_float(xyz_to_pvars, x_test_eigen, y_test_eigen, z_test_eigen, evaluated_xyz_expressions_test, max_exp);
 
     RCP<const Basic> symbolic_sum_train = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_train);
     RCP<const Basic> symbolic_sum_test = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions_test);
@@ -1304,7 +1542,273 @@ compute_mse_with_penalty_categorical(int d1, int d2, int m1, int m2, float penal
 
 
 std::tuple<std::string, std::unordered_map<std::string, std::string>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>>
-compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, float penalty_multiplier, float bias_coefficient, bool is_fractional, const std::vector<double>& x_data, const std::vector<double>& y_data, const std::vector<double>& z_data,  const std::string& load_filename = "", const std::string& save_filename = "") {
+compute_mse_with_penalty_float(int d1, int d2, int d3, int m1, int m2, int m3, float penalty_multiplier, float bias_coefficient, bool is_fractional, const std::vector<float>& x_data, const std::vector<float>& y_data, const std::vector<float>& z_data,  const std::string& load_filename = "", const std::string& save_filename = "") {
+    int degree1 = d1;
+    int degree2 = d2;
+    int degree3 = d3;
+
+    // If a load_filename is provided, load the state from the file
+    RCP<const Basic> aux_all_sub_expressions_equation;
+    RCP<const Basic> symbolic_sum_no_mean;
+    RCP<const Basic> preloaded_symbolic_sum;
+    unordered_map<RCP<const Basic>, RCP<const Basic>> aux_dict_final;
+    vector<vector<RCP<const Basic>>> coefficients_plus1, coefficients_plus2, coefficients_plus3;
+    int x_data_size = x_data.size();
+    int x_data_size_old;
+
+    if (!load_filename.empty()) {
+        load_data_2_layer(preloaded_symbolic_sum, x_data_size_old, load_filename);
+        x_data_size = x_data_size + x_data_size_old;
+    }
+    // Note: Fix the preloading of the symengine equation later. Commented out for now.
+    // } else {
+    // Define symbolic binary variables for the coefficients
+    coefficients_plus1.resize(degree1 + 1, vector<RCP<const Basic>>(m1));
+    coefficients_plus2.resize(degree2 + 1, vector<RCP<const Basic>>(m2));
+    coefficients_plus3.resize(degree3 + 1, vector<RCP<const Basic>>(m3));
+    // initialize_coefficients();
+
+    for (int i = 0; i <= degree1; ++i) {
+        for (int j = 0; j < m1; ++j) {
+            coefficients_plus1[i][j] = binary("P1_" + to_string(i) + "_plus_" + to_string(j));
+        }
+    }
+
+    for (int i = 0; i <= degree2; ++i) {
+        for (int j = 0; j < m2; ++j) {
+            coefficients_plus2[i][j] = binary("P2_" + to_string(i) + "_plus_" + to_string(j));
+        }
+    }
+
+    for (int i = 0; i <= degree3; ++i) {
+        for (int j = 0; j < m3; ++j) {
+            coefficients_plus3[i][j] = binary("P3_" + to_string(i) + "_plus_" + to_string(j));
+        }
+    }
+    // Define control points
+    vector<RCP<const Basic>> coefficients_A;
+    vector<RCP<const Basic>> coefficients_B;
+    vector<RCP<const Basic>> coefficients_C;
+
+    for (int i = 0; i <= degree1; ++i) {
+        coefficients_A.push_back(symbol("A" + std::to_string(i)));
+    }
+
+    for (int i = 0; i <= degree2; ++i) {
+        coefficients_B.push_back(symbol("B" + std::to_string(i)));
+    }
+
+    for (int i = 0; i <= degree3; ++i) {
+        coefficients_C.push_back(symbol("C" + std::to_string(i)));
+    }
+
+    // Generate coefficient expressions
+    vector<RCP<const Basic>> coeff_expressions1(degree1 + 1);
+    vector<RCP<const Basic>> coeff_expressions2(degree2 + 1);
+    vector<RCP<const Basic>> coeff_expressions3(degree3 + 1);
+
+    for (int i = 0; i <= degree1; ++i) {
+        coeff_expressions1[i] = generate_coefficient_expr(coefficients_plus1, degree1, m1, i);
+    }
+
+    for (int i = 0; i <= degree2; ++i) {
+        coeff_expressions2[i] = generate_coefficient_expr(coefficients_plus2, degree2, m2, i);
+    }
+
+    for (int i = 0; i <= degree3; ++i) {
+        coeff_expressions3[i] = generate_coefficient_expr(coefficients_plus3, degree3, m3, i);
+    }
+
+    // Create an empty aux_dict
+    unordered_map<RCP<const Basic>, RCP<const Basic>> existing_aux_dict_precomputed_powers;
+
+    // Precompute powers
+    unordered_map<string, unordered_map<int, RCP<const Basic>>> precomputed_powers;
+    for (int i = 0; i <= degree1; ++i) {
+        precomputed_powers["A" + to_string(i)] = precompute_powers(coeff_expressions1[i], 8, existing_aux_dict_precomputed_powers, true);
+    }
+    for (int i = 0; i <= degree2; ++i) {
+        precomputed_powers["B" + to_string(i)] = precompute_powers(coeff_expressions2[i], 8, existing_aux_dict_precomputed_powers, true);
+    }
+    for (int i = 0; i <= degree3; ++i) {
+        precomputed_powers["C" + to_string(i)] = precompute_powers(coeff_expressions3[i], 8, existing_aux_dict_precomputed_powers, true);
+    }
+
+    // Define symbolic variables
+    RCP<const Basic> x = symbol("x");
+    RCP<const Basic> y = symbol("y");
+    RCP<const Basic> t = symbol("t");
+    RCP<const Basic> z = symbol("z");
+
+    // Compute the symbolic basis functions
+    auto continuous_bezier_expr1 = bernstein_basis_functions_symbolic_continuous_control(x, degree1, coefficients_A);
+    auto continuous_bezier_expr2 = bernstein_basis_functions_symbolic_continuous_control(y, degree2, coefficients_B);
+    auto continuous_bezier_expr3 = bernstein_basis_functions_symbolic_continuous_control(t, degree3, coefficients_C);
+
+    RCP<const Basic> bezier_expr1, bezier_expr2, bezier_expr3;
+
+    // Combine the two Bézier functions
+    auto combined_continuous_bottom_expr = expand(add(continuous_bezier_expr1, continuous_bezier_expr2));
+
+    // Create the power of the third Bézier function
+    auto bezier_continuous_expr3_2 = expand(pow(continuous_bezier_expr3, integer(2)));
+
+    // Substitute combined_continuous_bottom_expr for t in bezier_continuous_expr3_2
+    map_basic_basic substitutions;
+    substitutions[t] = combined_continuous_bottom_expr;
+    auto substituted_expr = expand(bezier_continuous_expr3_2->subs(substitutions));
+
+    // Substitute precomputed powers in substituted_expr
+    auto final_expr = substitute_precomputed_powers(substituted_expr, precomputed_powers);
+
+    map_basic_basic substitutions_A;
+
+    // Substitute coefficients in substituted_expr
+    for (int i = 0; i <= degree1; ++i) {
+        substitutions_A[symbol("A" + to_string(i))] = coeff_expressions1[i];
+    }
+
+    substituted_expr = final_expr->subs(substitutions_A);
+
+    map_basic_basic substitutions_C;
+
+    for (int i = 0; i <= degree3; ++i) {
+        substitutions_C[symbol("C" + to_string(i))] = coeff_expressions3[i];
+    }
+    substituted_expr = substituted_expr->subs(substitutions_C);
+
+    map_basic_basic substitutions_B;
+
+    for (int i = 0; i <= degree2; ++i) {
+        substitutions_B[symbol("B" + to_string(i))] = coeff_expressions2[i];
+    }
+
+    auto final_substituted_expr = expand(substituted_expr->subs(substitutions_B));
+
+    // Create auxiliary variables
+    auto result = apply_aux_variables(final_substituted_expr, existing_aux_dict_precomputed_powers, false);
+    final_substituted_expr = result.first;
+    existing_aux_dict_precomputed_powers = result.second;
+
+    // Now define the z^2
+    auto z_squared= pow(z, integer(2));
+
+    // Now define the middle expression
+    auto middle_expression = mul(mul(z, integer(-2)), continuous_bezier_expr3);
+
+    map_basic_basic substitutions_middle;
+    substitutions_middle[t] = combined_continuous_bottom_expr;
+    auto substituted_expr_middle = expand(middle_expression->subs(substitutions_middle));
+
+    // Substitute precomputed powers in substituted_expr
+    auto final_expr_middle = substitute_precomputed_powers(substituted_expr_middle, precomputed_powers);
+
+    final_expr_middle = final_expr_middle->subs(substitutions_A);
+
+    final_expr_middle = final_expr_middle->subs(substitutions_C);
+
+    final_expr_middle = expand(final_expr_middle->subs(substitutions_B));
+
+    // Create auxiliary variables
+    result = apply_aux_variables(final_expr_middle, existing_aux_dict_precomputed_powers, false);
+    final_expr_middle = result.first;
+    aux_dict_final = result.second;
+
+    // Putting it all together:
+    aux_all_sub_expressions_equation = add(add(z_squared, final_expr_middle), final_substituted_expr);
+
+    // Filter the auxiliary dictionary
+    filter_aux_dict(aux_all_sub_expressions_equation, aux_dict_final);
+    // End of original else statement from when I allowed for loading of symengine expression
+    // }
+
+
+    auto unique_terms = extract_unique_xyz_terms(aux_all_sub_expressions_equation);
+
+
+    // Decompose the main expression into sub-expressions
+    auto unique_sub_expressions = separate_sub_expressions(aux_all_sub_expressions_equation);
+
+    // Map xyz expressions to P_var expressions
+    auto xyz_to_pvars = map_xyz_to_pvars(unique_sub_expressions);
+
+    // Precompute unique xyz expressions
+    unordered_map<std::string, float> evaluated_xyz_expressions;
+
+    // Convert input vectors to Eigen arrays with memory alignment
+    Eigen::ArrayXf x_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(x_data.data(), x_data.size());
+    Eigen::ArrayXf y_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(y_data.data(), y_data.size());
+    Eigen::ArrayXf z_eigen = Eigen::Map<const Eigen::ArrayXf, Eigen::Aligned>(z_data.data(), z_data.size());
+
+    // Precompute unique xyz expressions
+    int max_degree = max(d1, d2); // Use std::max to get the maximum value
+    int max_exp = max_degree * d3 * 2;
+
+    evaluate_unique_xyz_expressions_optimized_float(xyz_to_pvars, x_eigen, y_eigen, z_eigen, evaluated_xyz_expressions, max_exp);
+    
+    // Evaluate and combine the expressions
+    symbolic_sum_no_mean = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions);
+
+    // calculate the number of samples so SSE is MSE
+    float mean_transformer = 1.0 / x_data_size;
+
+    if (!load_filename.empty()) {
+        symbolic_sum_no_mean = add(symbolic_sum_no_mean, preloaded_symbolic_sum);
+    }
+
+    // Apply the test multiplier to the test symbolic sum
+    RCP<const Basic> symbolic_sum = expand(mul(real_double(mean_transformer), symbolic_sum_no_mean));
+
+    // Find the largest coefficient
+    float max_coeff = find_max_coefficient(symbolic_sum);
+
+    // A good initial guess for a penalty coeff is 10x that of the largest coeff in the sse
+    float penalty_coefficient = penalty_multiplier * max_coeff;
+
+    // Generate penalty functions
+    auto penalty_functions = generate_penalty_functions(aux_dict_final, penalty_coefficient);
+
+    RCP<const Basic> sse_with_penalty = symbolic_sum;
+    for (const auto& penalty_function : penalty_functions) {
+        sse_with_penalty = add(sse_with_penalty, penalty_function);
+    }
+
+    // Convert sse_with_penalty to string
+    std::string sse_with_penalty_str = sse_with_penalty->__str__();
+
+    // Convert aux_dict_final to a map of strings for easier handling in Python
+    unordered_map<std::string, std::string> aux_dict_str;
+    for (const auto& pair : aux_dict_final) {
+        aux_dict_str[pair.first->__str__()] = pair.second->__str__();
+    }
+
+    // Convert coefficients to strings
+    auto convert_coefficients_to_strings = [](const std::vector<std::vector<RCP<const Basic>>>& coefficients) {
+        std::vector<std::vector<std::string>> coeffs_str;
+        for (const auto& row : coefficients) {
+            std::vector<std::string> row_str;
+            for (const auto& coeff : row) {
+                row_str.push_back(coeff->__str__());
+            }
+            coeffs_str.push_back(row_str);
+        }
+        return coeffs_str;
+    };
+
+    std::vector<std::vector<std::string>> coeffs_plus1_str = convert_coefficients_to_strings(coefficients_plus1);
+    std::vector<std::vector<std::string>> coeffs_plus2_str = convert_coefficients_to_strings(coefficients_plus2);
+    std::vector<std::vector<std::string>> coeffs_plus3_str = convert_coefficients_to_strings(coefficients_plus3);
+
+    // Save the current state if a save_filename is provided
+    if (!save_filename.empty()) {
+        save_data_2_layer(symbolic_sum_no_mean, x_data_size, save_filename);
+    }
+
+    return std::make_tuple(sse_with_penalty_str, aux_dict_str, coeffs_plus1_str, coeffs_plus2_str, coeffs_plus3_str);
+}
+
+std::tuple<std::string, std::unordered_map<std::string, std::string>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>, std::vector<std::vector<std::string>>>
+compute_mse_with_penalty_double(int d1, int d2, int d3, int m1, int m2, int m3, float penalty_multiplier, float bias_coefficient, bool is_fractional, const std::vector<double>& x_data, const std::vector<double>& y_data, const std::vector<double>& z_data,  const std::string& load_filename = "", const std::string& save_filename = "") {
     int degree1 = d1;
     int degree2 = d2;
     int degree3 = d3;
@@ -1506,7 +2010,7 @@ compute_mse_with_penalty(int d1, int d2, int d3, int m1, int m2, int m3, float p
     int max_degree = max(d1, d2); // Use std::max to get the maximum value
     int max_exp = max_degree * d3 * 2;
 
-    evaluate_unique_xyz_expressions_optimized(xyz_to_pvars, x_eigen, y_eigen, z_eigen, evaluated_xyz_expressions, max_exp);
+    evaluate_unique_xyz_expressions_optimized_double(xyz_to_pvars, x_eigen, y_eigen, z_eigen, evaluated_xyz_expressions, max_exp);
     
     // Evaluate and combine the expressions
     symbolic_sum_no_mean = evaluate_and_combine(xyz_to_pvars, evaluated_xyz_expressions);
@@ -1581,7 +2085,17 @@ PYBIND11_MODULE(quantum_kan, m) {
           py::arg("load_filename") = "",
           py::arg("save_filename") = "");
 
-    m.def("compute_mse_with_penalty", &compute_mse_with_penalty, "Compute MSE with penalty",
+    m.def("compute_mse_with_penalty_float", &compute_mse_with_penalty_float, "Compute MSE with penalty float",
+          py::arg("d1"), py::arg("d2"), py::arg("d3"),
+          py::arg("m1"), py::arg("m2"), py::arg("m3"),
+          py::arg("penalty_multiplier"),
+          py::arg("bias_coefficient"),
+          py::arg("is_fractional"),
+          py::arg("x_data"), py::arg("y_data"), py::arg("z_data"),
+          py::arg("load_filename") = "",
+          py::arg("save_filename") = "");
+
+    m.def("compute_mse_with_penalty_double", &compute_mse_with_penalty_double, "Compute MSE with penalty double",
           py::arg("d1"), py::arg("d2"), py::arg("d3"),
           py::arg("m1"), py::arg("m2"), py::arg("m3"),
           py::arg("penalty_multiplier"),
